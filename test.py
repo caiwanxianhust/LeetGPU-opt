@@ -650,6 +650,38 @@ def mse_vec():
     print("All tests passed!")
 
 
+def gaussian_blur():
+    # 测试
+    input_rows, input_cols = 1025, 1025
+    kernel_rows, kernel_cols = 5, 5
+    x = torch.randn(input_rows, input_cols, device="cuda", dtype=torch.float32)
+    kernel = torch.randn(kernel_rows, kernel_cols, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    torch_out = torch.nn.functional.conv2d(
+        x.view(1, 1, input_rows, input_cols), 
+        kernel.view(1, 1, kernel_rows, kernel_cols),
+        stride=1, padding="same")
+    ouput_rows = input_rows
+    ouput_cols = input_cols
+    torch_out = torch_out.view(ouput_rows, ouput_cols)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.gaussian_blur(x, kernel)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+    out = out.view(ouput_rows, ouput_cols)
+
+    # 打印结果
+    print(x.view(input_rows, input_cols)[:2, :4])
+    print(kernel.view(kernel_rows, kernel_cols))
+    print(out[:2, :4])
+    print(torch_out[:2, :4])
+
+    # 检查结果
+    assert torch.allclose(out, torch_out, atol=1e-3)
+    print("All tests passed!")
 
 
 if __name__ == "__main__":
@@ -677,4 +709,5 @@ if __name__ == "__main__":
     # sparse_matrix_vector_multiplication()
     # gemm()
     # avg_categorical_cross_entropy_loss()
-    mse_vec()
+    # mse_vec()
+    gaussian_blur()

@@ -104,6 +104,11 @@ void mean_squared_error_cuda(
     const float* predictions, const float* targets, float* mse, int N
 );
 
+void gaussian_blur_cuda(
+    const float* input, const float* kernel, float* output,
+    int input_rows, int input_cols, int kernel_rows, int kernel_cols
+);
+
 
 // -------------------------- Python 绑定函数 --------------------------
 torch::Tensor vector_add(
@@ -635,6 +640,37 @@ torch::Tensor mse_vec(
     return mse;
 }
 
+
+torch::Tensor gaussian_blur(
+    const torch::Tensor& input,
+    const torch::Tensor& kernel
+) {
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D (H, W)");
+    TORCH_CHECK(kernel.ndimension() == 2, "Kernel must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(kernel.device().is_cuda(), "Kernel must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(kernel.dtype() == torch::kFloat32, "Kernel must be of type float32");
+
+    torch::Tensor output = torch::empty_like(input);
+    int input_rows = input.size(0);
+    int input_cols = input.size(1);
+    int kernel_rows = kernel.size(0);
+    int kernel_cols = kernel.size(1);
+    TORCH_CHECK(kernel_rows % 2 == 1 && kernel_cols % 2 == 1, "Kernel size must be odd");
+    TORCH_CHECK(input_rows %2 == 1 && input_cols % 2 == 1, "Input size must be odd");
+
+    gaussian_blur_cuda(
+        input.data_ptr<float>(),
+        kernel.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input_rows, input_cols,
+        kernel_rows, kernel_cols
+    );
+    return output;
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
     m.def("matmul", &matrix_multiplication, "Matrix Multiplication (CUDA)");
@@ -661,4 +697,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm", &gemm, "GEMM (CUDA)");
     m.def("avg_categorical_cross_entropy_loss", &avg_categorical_cross_entropy_loss, "Average Categorical Cross Entropy Loss (CUDA)");
     m.def("mse_vec", &mse_vec, "Mean Squared Error (CUDA)");
+    m.def("gaussian_blur", &gaussian_blur, "Gaussian Blur (CUDA)");
 }

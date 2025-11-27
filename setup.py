@@ -34,6 +34,7 @@ setup(
                 "src/gemm.cu",
                 "src/categorical_cross_entropy_loss.cu",
                 "src/mean_squared_error.cu",
+                "src/gaussian_blur.cu",  # 添加 gaussian_blur.cu
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [
