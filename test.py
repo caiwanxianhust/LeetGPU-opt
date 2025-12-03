@@ -684,6 +684,100 @@ def gaussian_blur():
     print("All tests passed!")
 
 
+def topk_1D():
+    # 测试
+    N = 10000000
+    x = torch.randn(N, device="cuda", dtype=torch.float32)
+    # x = torch.arange(N, device="cuda", dtype=torch.float32)
+    k = 1000
+
+    # 用 PyTorch 实现
+    torch_out = torch.topk(x, k, largest=True, sorted=True)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.topk_1D(x, k)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print(x[:10])
+    print(out[:10])
+    print(torch_out.values[:10])
+
+    # 检查结果
+    assert torch.allclose(out, torch_out.values, rtol=1e-3, atol=1e-3)
+    print("All tests passed!")
+
+
+def batched_matmul():
+    # 测试
+    BATCH = 40
+    M = 517
+    N = 253
+    K = 130
+    A = torch.randn(BATCH, M, K, device="cuda", dtype=torch.float32)
+    B = torch.randn(BATCH, K, N, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    torch_out = torch.bmm(A, B)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.batched_matmul(A, B)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print(A[0, :4, :4])
+    print(B[0, :4, :4])
+    print(out[0, :4, :4])
+    print(torch_out[0, :4, :4])
+
+    # 检查结果
+    assert torch.allclose(out, torch_out, atol=1e-3)
+    print("All tests passed!")
+
+
+def int8_quantized_matmul():
+    # 测试
+    M = 5000
+    N = 4000
+    K = 2041
+    A = torch.randint(-128, 128, (M, K), device="cuda", dtype=torch.int8)
+    B = torch.randint(-128, 128, (K, N), device="cuda", dtype=torch.int8)
+    scale_A = 0.05
+    scale_B = 0.1
+    scale_C = 0.01
+    zero_point_A = 0
+    zero_point_B = 0
+    zero_point_C = 0
+
+    # 用 PyTorch 实现
+    A_float = A.int() - zero_point_A
+    B_float = B.int() - zero_point_B
+    C_float = torch.matmul(A_float.float(), B_float.float())
+    torch_out = (scale_A * scale_B / scale_C) * C_float
+    torch_out = torch.clamp(torch_out.round() + zero_point_C, -128, 127).to(torch.int8)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.int8_quantized_matmul(
+        A, B, scale_A, scale_B, scale_C, zero_point_A, zero_point_B, zero_point_C)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print(A[:4, :4])
+    print(B[:4, :4])
+    print(out[-8:, :8])
+    print(torch_out[-8:, :8])
+
+    # 检查结果
+    assert torch.allclose(out, torch_out, atol=1e-3)
+    print("All tests passed!")
+
+
 if __name__ == "__main__":
     # vector_addition()
     # matrix_multiplication()
@@ -710,4 +804,7 @@ if __name__ == "__main__":
     # gemm()
     # avg_categorical_cross_entropy_loss()
     # mse_vec()
-    gaussian_blur()
+    # gaussian_blur()
+    # topk_1D()
+    # batched_matmul()
+    int8_quantized_matmul()

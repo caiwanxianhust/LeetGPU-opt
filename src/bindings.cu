@@ -109,6 +109,19 @@ void gaussian_blur_cuda(
     int input_rows, int input_cols, int kernel_rows, int kernel_cols
 );
 
+void topk_cuda(
+    const float* input, float* output, int N, int k
+);
+
+void batched_matmul_cuda(
+    const float* A, const float* B, float* C, int BATCH, int M, int N, int K
+);
+
+void int8_quantized_matmul_cuda(
+    const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, 
+    float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C
+);
+
 
 // -------------------------- Python 绑定函数 --------------------------
 torch::Tensor vector_add(
@@ -671,6 +684,94 @@ torch::Tensor gaussian_blur(
 }
 
 
+torch::Tensor topk_1D(
+    const torch::Tensor& input,
+    int k
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(k > 0 && k <= input.size(0), "k must be in the range [1, N]");
+
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({k}, options);
+    
+    topk_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, k
+    );
+    
+    return output; 
+}
+
+
+torch::Tensor batched_matmul(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 3, "Input A must be 3D");
+    TORCH_CHECK(B.ndimension() == 3, "Input B must be 3D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "Input B must be of type float32");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have the same batch size");
+    TORCH_CHECK(A.size(2) == B.size(1), "Input tensors must have compatible shapes");
+
+    int BATCH = A.size(0);
+    int M = A.size(1);
+    int N = B.size(2);
+    int K = A.size(2);
+
+    auto options = A.options();
+    torch::Tensor C = torch::empty({BATCH, M, N}, options);
+
+    batched_matmul_cuda(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        BATCH, M, N, K
+    );
+
+    return C;
+}
+
+
+torch::Tensor int8_quantized_matmul(
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    float scale_A, float scale_B, float scale_C,
+    int zero_point_A, int zero_point_B, int zero_point_C
+) {
+    TORCH_CHECK(A.ndimension() == 2, "Input A must be 2D");
+    TORCH_CHECK(B.ndimension() == 2, "Input B must be 2D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kInt8, "Input A must be of type int8");
+    TORCH_CHECK(B.dtype() == torch::kInt8, "Input B must be of type int8");
+    TORCH_CHECK(A.size(1) == B.size(0), "Input tensors must have compatible shapes");
+
+    int M = A.size(0);
+    int N = B.size(1);
+    int K = A.size(1);
+
+    auto options = A.options();
+    torch::Tensor C = torch::empty({M, N}, options.dtype(torch::kInt8));
+
+    int8_quantized_matmul_cuda(
+        A.data_ptr<int8_t>(),
+        B.data_ptr<int8_t>(),
+        C.data_ptr<int8_t>(),
+        M, N, K,
+        scale_A, scale_B, scale_C,
+        zero_point_A, zero_point_B, zero_point_C
+    );
+    return C;
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
     m.def("matmul", &matrix_multiplication, "Matrix Multiplication (CUDA)");
@@ -698,4 +799,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("avg_categorical_cross_entropy_loss", &avg_categorical_cross_entropy_loss, "Average Categorical Cross Entropy Loss (CUDA)");
     m.def("mse_vec", &mse_vec, "Mean Squared Error (CUDA)");
     m.def("gaussian_blur", &gaussian_blur, "Gaussian Blur (CUDA)");
+    m.def("topk_1D", &topk_1D, "TopK (CUDA)");
+    m.def("batched_matmul", &batched_matmul, "Batched Matrix Multiplication (CUDA)");
+    m.def("int8_quantized_matmul", &int8_quantized_matmul, "Int8 Quantized Matrix Multiplication (CUDA)");
 }

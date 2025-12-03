@@ -35,6 +35,9 @@ setup(
                 "src/categorical_cross_entropy_loss.cu",
                 "src/mean_squared_error.cu",
                 "src/gaussian_blur.cu",  # 添加 gaussian_blur.cu
+                "src/topk_selection.cu",  # 添加 topk_selection.cu
+                "src/batched_matrix_multiplication.cu",  # 添加 batched_matrix_multiplication.cu
+                "src/int8_quantized_matmul.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [
