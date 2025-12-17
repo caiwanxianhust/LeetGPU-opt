@@ -1,6 +1,7 @@
 import torch
 import leetgpu
 import time
+import torch.nn.functional as F
 
 
 def matrix_multiplication():
@@ -778,6 +779,378 @@ def int8_quantized_matmul():
     print("All tests passed!")
 
 
+def ordinary_least_squares():
+    # 测试
+    n_samples = 1024 * 128  + 23
+    n_features = 965
+    x = torch.randn(n_samples, n_features, device="cuda", dtype=torch.float32)
+    y = torch.randn(n_samples, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    torch_beta = torch.linalg.lstsq(x, y).solution
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    beta = leetgpu.ordinary_least_squares(x, y)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X, y")
+    print(x[:10, :10])
+    print(y[:10])
+    print("beta")
+    print(beta[:10])
+    print(torch_beta[:10])
+
+
+    # 检查结果
+    assert torch.allclose(beta, torch_beta, rtol=1e-2, atol=1e-2)
+    print("All tests passed!")
+
+
+class LogisticRegression(torch.nn.Module):
+    def __init__(self, n_features, weight_decay=0.01):
+        super(LogisticRegression, self).__init__()
+        self.linear = torch.nn.Linear(n_features, 1, bias=False)
+        self.sigmoid = torch.nn.Sigmoid()
+        self.loss_fn = torch.nn.BCELoss()
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=0.001, weight_decay=weight_decay)
+    
+    def forward(self, x):
+        x = self.linear(x)
+        x = self.sigmoid(x)
+        return x
+
+
+def logistic_regression():
+    # 测试
+    n_samples = 1024 * 128 + 23
+    n_features = 985
+    x = torch.randn(n_samples, n_features, device="cuda", dtype=torch.float32)
+    y = torch.randint(0, 2, (n_samples,), device="cuda", dtype=torch.int32).float()
+    # X = [[2.0, 1.0], [1.0, 2.0], [3.0, 3.0], [1.5, 2.5], [-1.0, -2.0], [-2.0, -1.0], [-1.5, -2.5], [-3.0, -3.0]]
+    # y = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    # x = torch.tensor(X, device="cuda", dtype=torch.float32)
+    # y = torch.tensor(y, device="cuda", dtype=torch.float32)
+    # n_samples = 8
+    # n_features = 2
+
+    # 用 PyTorch 实现
+    # train model
+    model = LogisticRegression(n_features).to(torch.device("cuda"))
+    init_beta = model.linear.weight.data[0].clone().detach()
+    print("init weights")
+    print(init_beta[:10])
+    for epoch in range(50):
+        y_pred = model(x)
+        loss = model.loss_fn(y_pred, y.view(-1, 1))
+        model.optimizer.zero_grad()
+        loss.backward()
+        model.optimizer.step()
+
+    print(loss.item())
+    
+    torch_beta = model.linear.weight.data[0].clone().detach()   
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    beta = leetgpu.logistic_regression(x, y, init_beta)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X, y")
+    print(x[:10, :10])
+    print(y[:10])
+    print("beta")
+    print(beta[:10])
+    print(torch_beta[:10])
+
+    # 检查结果
+    assert torch.allclose(beta, torch_beta, rtol=1e-3, atol=1e-3)
+    print("All tests passed!")
+
+
+# 双调排序
+def sorting():
+    # 测试
+    N = 1024 * 128 + 23
+    x = torch.randn(N, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    torch_sorted = torch.sort(x)[0]
+
+    # 用 LeetGPU 实现
+    y = x.clone()
+    start_time = time.time()
+    leetgpu.sorting(y)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:10])
+    print("sorted")
+    print(y[:10])
+    print(torch_sorted[:10])
+
+    # 检查结果
+    assert torch.allclose(y, torch_sorted, rtol=1e-3, atol=1e-3)
+    print("All tests passed!")
+
+
+def monte_carlo_integration():
+    # 测试
+    n_samples = 1024 * 128 + 23
+    a, b = 2.0, 5.0
+    y_samples = torch.randn(n_samples, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    torch_integral = torch.mean(y_samples) * (b - a)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    integral = leetgpu.monte_carlo_integration(y_samples, a, b)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("y_samples")
+    print(y_samples[:10])
+    print("integral")
+    print(integral)
+    print(torch_integral)
+
+    # 检查结果
+    assert torch.allclose(integral, torch_integral, rtol=1e-3, atol=1e-3)
+    print("All tests passed!")
+
+
+def radix_sort():
+    # 测试
+    N = 1024 * 128 + 23
+    # 修改为 uint32 类型
+    x = torch.randint(0, 2**32, (N,), device="cuda", dtype=torch.uint32)
+
+    # 用 PyTorch 实现 (正确处理 uint32 类型)
+    # 将 uint32 转换为 float 进行排序，然后使用排序后的索引
+    indices = torch.argsort(x.float())
+    # 使用 gather 方法来获取排序后的结果，避免直接索引 uint32 张量
+    torch_sorted = torch.gather(x, 0, indices)
+
+    # 用 LeetGPU 实现
+    y = x.clone()
+    start_time = time.time()
+    out = leetgpu.radix_sort(y)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:10])
+    print("sorted")
+    print(out[:10])
+    print(torch_sorted[:10])
+
+    # 检查结果 (比较前需要确保两个数组具有相同的类型)
+    assert torch.allclose(out.float(), torch_sorted.float(), rtol=1e-3, atol=1e-3)
+    print("All tests passed!")
+
+
+def compare_tensors(tensor1, tensor2, atol=1e-3, rtol=1e-5, max_print=10):
+    """
+    比较两个张量，并打印所有不匹配元素的信息
+    
+    Args:
+        tensor1, tensor2: 要比较的张量
+        atol: 绝对容差
+        rtol: 相对容差
+        max_print: 最多打印多少个不匹配项
+    
+    Returns:
+        bool: 如果所有元素都匹配则返回True
+    """
+    # 检查形状是否一致
+    if tensor1.shape != tensor2.shape:
+        print(f"Shape mismatch: {tensor1.shape} vs {tensor2.shape}")
+        return False
+        
+    # 计算差异
+    close = torch.isclose(tensor1, tensor2, atol=atol, rtol=rtol)
+    
+    if close.all():
+        print("All tests passed!")
+        return True
+    else:
+        # 找到不匹配的位置
+        not_close = ~close
+        mismatch_indices = torch.nonzero(not_close)
+        
+        print(f"Found {mismatch_indices.shape[0]} mismatched elements out of {tensor1.numel()} total elements")
+        print("\nFirst {} mismatches:".format(min(max_print, mismatch_indices.shape[0])))
+        print("Index\t\tComputed\tExpected\tDifference")
+        print("-" * 60)
+        
+        for i, idx in enumerate(mismatch_indices[:max_print]):
+            idx_tuple = tuple(idx.tolist())
+            computed_val = tensor1[idx_tuple].item()
+            expected_val = tensor2[idx_tuple].item()
+            diff = abs(computed_val - expected_val)
+            
+            print(f"{str(idx_tuple):15} {computed_val:10.6f} \t{expected_val:10.6f} \t{diff:10.6f}")
+            
+        # 显示最大差异
+        abs_diff = torch.abs(tensor1 - tensor2)
+        max_diff_idx = torch.argmax(abs_diff)
+        max_diff_val = abs_diff.flatten()[max_diff_idx].item()
+        
+        # 将扁平索引转换为多维索引
+        max_diff_multi_idx = torch.unravel_index(max_diff_idx, tensor1.shape) if hasattr(torch, 'unravel_index') else \
+                            tuple((max_diff_idx // tensor1.stride(dim)) % tensor1.size(dim) for dim in range(tensor1.dim()))
+        
+        print(f"\nMaximum difference: {max_diff_val:.6f}")
+        print(f"At index: {max_diff_multi_idx}")
+        print(f"Computed value: {tensor1[max_diff_multi_idx].item():.6f}")
+        print(f"Expected value: {tensor2[max_diff_multi_idx].item():.6f}")
+        
+        return False
+
+
+def matrix_power():
+    # 测试
+    N = 200
+    x = torch.randn(N, N, device="cuda", dtype=torch.float32)
+    k = 7
+
+    # 用 PyTorch 实现
+    torch_out = torch.matrix_power(x, k)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.matrix_power(x, k)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+    out = out.view(N, N)
+
+    # 打印结果
+    print("X")
+    print(x[:4, :4])
+    print("Power k")
+    print(k)
+    print("Result")
+    print(out[-4:, -4:])
+    print(torch_out[-4:, -4:])
+
+    # 检查结果
+    # assert torch.allclose(out, torch_out, atol=1e-3)
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+def nearest_neighbor():
+    # 测试
+    N = 1024 * 128 + 23
+    x = torch.randn(N, 3, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现 - 改进版本以避免内存溢出
+    # 不再使用 torch.cdist 来计算完整的距离矩阵，因为这会占用太多内存
+    # 用 PyTorch 实现计算最近邻索引
+    def compute_nearest_neighbor_indices(points):
+        indices = torch.zeros(points.shape[0], device=points.device, dtype=torch.int32)
+        for i in range(points.shape[0]):
+            # 计算当前点与其他所有点的距离
+            diff = points - points[i]
+            squared_distances = torch.sum(diff * diff, dim=1)
+            # 设置自身距离为无穷大以排除自己
+            squared_distances[i] = float('inf')
+            # 找到最小距离的索引
+            indices[i] = torch.argmin(squared_distances)
+        return indices
+
+    torch_out = compute_nearest_neighbor_indices(x)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.nearest_neighbor(x)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:4])
+    print("Nearest Neighbor")
+    print(out[:10])
+    print(torch_out[:10])
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+def batch_norm():
+    # 测试
+    N = 1024
+    C = 900
+    x = torch.randn(N, C, device="cuda", dtype=torch.float32)
+    gamma = torch.randn(C, device="cuda", dtype=torch.float32)
+    beta = torch.randn(C, device="cuda", dtype=torch.float32)
+    eps = 1e-5
+
+    # 用 PyTorch 实现
+    variance, mean = torch.var_mean(x, dim=0)
+    normalized = (x - mean.view(1, -1)) / torch.sqrt(variance.view(1, -1) + eps)
+    torch_out = gamma * normalized + beta
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.batch_norm(x, gamma, beta, eps)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:4, :4])
+    print("Batch Norm Result")
+    print(out[:4, :4])
+    print(torch_out[:4, :4])
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+def maxpooling_2D():
+    # 测试
+    N = 32
+    C = 3
+    H = 128
+    W = 128
+    x = torch.randn(N, C, H, W, device="cuda", dtype=torch.float32)
+    kernel_size = 3
+    stride = 2
+    padding = 1
+
+    # 用 PyTorch 实现
+    torch_out = F.max_pool2d(x, kernel_size, stride, padding)
+
+    # 用 LeetGPU 实现
+    start_time = time.time()    
+    out = leetgpu.max_pooling_2D(x, kernel_size, stride, padding)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[0, 0, :4, :4])
+    print("Max Pooling Result")
+    print(out[0, 0, :4, :4])
+    print(torch_out[0, 0, :4, :4])
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+
+
+
 if __name__ == "__main__":
     # vector_addition()
     # matrix_multiplication()
@@ -807,4 +1180,13 @@ if __name__ == "__main__":
     # gaussian_blur()
     # topk_1D()
     # batched_matmul()
-    int8_quantized_matmul()
+    # int8_quantized_matmul()
+    # ordinary_least_squares()
+    # logistic_regression()
+    # monte_carlo_integration()
+    # sorting()
+    # radix_sort()
+    # matrix_power()
+    # nearest_neighbor()
+    # batch_norm()
+    maxpooling_2D()

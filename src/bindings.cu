@@ -1,4 +1,5 @@
 #include <torch/extension.h>
+#include <tuple>
 
 
 
@@ -121,6 +122,43 @@ void int8_quantized_matmul_cuda(
     const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, 
     float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C
 );
+
+void ordinary_least_squares_cuda(
+    const float* X, const float* y, float* beta, int n_samples, int n_features
+); 
+
+void logistic_regression_cuda(
+    const float* X, const float* y, float* beta, int n_samples, int n_features
+);
+
+void monte_carlo_integration_cuda(
+    const float* y_samples, float* result, float a, float b, int n_samples
+);
+
+void sort_cuda(
+    float* data, int N
+);
+
+void radix_sort_cuda(
+    const unsigned int* input, unsigned int* output, int N
+);
+
+void matrix_power_cuda(
+    const float* input, float* output, int N, int P
+);
+
+void nearest_neighbor_cuda(
+    const float* points, int* indices, int N
+);
+
+void batch_norm_cuda(
+    const float* input, const float* gamma, const float* beta, float* output, int N, int C, float eps
+);
+
+void max_pooling_2D_cuda(
+    const float* input, float* output, int N, int C, int H, int W, int kernel_size, int stride, int padding
+);
+
 
 
 // -------------------------- Python 绑定函数 --------------------------
@@ -772,6 +810,217 @@ torch::Tensor int8_quantized_matmul(
 }
 
 
+torch::Tensor ordinary_least_squares(
+    const torch::Tensor& X,
+    const torch::Tensor& y
+) { 
+    TORCH_CHECK(X.ndimension() == 2, "Input X must be 2D");
+    TORCH_CHECK(y.ndimension() == 1, "Input y must be 1D");
+    TORCH_CHECK(X.device().is_cuda(), "Input X must be on CUDA");
+    TORCH_CHECK(y.device().is_cuda(), "Input y must be on CUDA");
+    TORCH_CHECK(X.dtype() == torch::kFloat32, "Input X must be of type float32");
+    TORCH_CHECK(y.dtype() == torch::kFloat32, "Input y must be of type float32");
+    TORCH_CHECK(X.size(0) == y.size(0), "Input tensors must have the same size");
+
+    torch::Tensor beta = torch::empty({X.size(1)}, X.options());
+    ordinary_least_squares_cuda(
+        X.data_ptr<float>(),
+        y.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        X.size(0), X.size(1)
+    );
+
+    return beta;
+}
+
+
+torch::Tensor logistic_regression(
+    const torch::Tensor& X,
+    const torch::Tensor& y,
+    const torch::Tensor& beta
+) { 
+    TORCH_CHECK(X.ndimension() == 2, "Input X must be 2D");
+    TORCH_CHECK(y.ndimension() == 1, "Input y must be 1D");
+    TORCH_CHECK(beta.ndimension() == 1, "Input beta must be 1D");
+    TORCH_CHECK(X.device().is_cuda(), "Input X must be on CUDA");
+    TORCH_CHECK(y.device().is_cuda(), "Input y must be on CUDA");
+    TORCH_CHECK(beta.device().is_cuda(), "Input beta must be on CUDA");
+    TORCH_CHECK(X.dtype() == torch::kFloat32, "Input X must be of type float32");
+    TORCH_CHECK(y.dtype() == torch::kFloat32, "Input y must be of type float32");
+    TORCH_CHECK(beta.dtype() == torch::kFloat32, "Input beta must be of type float32");
+    TORCH_CHECK(X.size(0) == y.size(0), "Input tensors must have the same size");
+    TORCH_CHECK(X.size(1) == beta.size(0), "Input tensors must have compatible shapes");
+    logistic_regression_cuda(
+        X.data_ptr<float>(),
+        y.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        X.size(0), X.size(1)
+    );
+    return beta;
+}
+
+torch::Tensor monte_carlo_integration(
+    const torch::Tensor& y_samples,
+    float a, float b
+) {
+    TORCH_CHECK(y_samples.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(y_samples.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(y_samples.dtype() == torch::kFloat32, "Input must be of type float32");
+
+    int N = y_samples.size(0);
+    torch::Tensor result = torch::empty({1}, y_samples.options());
+    monte_carlo_integration_cuda(
+        y_samples.data_ptr<float>(),
+        result.data_ptr<float>(),
+        a, b, N
+    );
+    return result;
+}
+
+
+void sorting(const torch::Tensor& input) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    sort_cuda(input.data_ptr<float>(), input.size(0));
+    return;
+}
+
+
+torch::Tensor radix_sort(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kUInt32, "Input must be of type uint32");
+
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+
+    radix_sort_cuda(
+        input.data_ptr<unsigned int>(),
+        output.data_ptr<unsigned int>(),
+        N
+    );
+    return output;
+}
+
+
+torch::Tensor matrix_power(
+    const torch::Tensor& input,
+    int power
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(power >= 0, "Power must be non-negative");
+    TORCH_CHECK(input.size(0) == input.size(1), "Input must be square");
+
+    torch::Tensor output = torch::empty_like(input);
+
+    matrix_power_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input.size(0),
+        power
+    );
+
+    return output;
+}
+
+
+torch::Tensor nearest_neighbor(
+    const torch::Tensor& points
+) {
+    TORCH_CHECK(points.ndimension() == 2, "points arr must be 2D");
+    TORCH_CHECK(points.device().is_cuda(), "points must be on CUDA");
+    TORCH_CHECK(points.dtype() == torch::kFloat32, "points must be of type float32");
+    TORCH_CHECK(points.size(1) == 3, "points must be 3D");
+    int N = points.size(0);
+
+    auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+    torch::Tensor indices = torch::empty({N}, options);
+
+    nearest_neighbor_cuda(
+        points.data_ptr<float>(),
+        indices.data_ptr<int>(),
+        N
+    );
+
+    return indices;
+}
+
+
+torch::Tensor max_pooling_2D(
+    const torch::Tensor& input,
+    int kernel_size,
+    int stride,
+    int padding
+) { 
+    TORCH_CHECK(input.ndimension() == 4, "Input must be 4D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32")
+
+    int N = input.size(0);
+    int C = input.size(1);
+    int H = input.size(2);
+    int W = input.size(3);
+    int H_out = (H + 2 * padding - kernel_size) / stride + 1;
+    int W_out = (W + 2 * padding - kernel_size) / stride + 1;
+    torch::Tensor output = torch::empty({N, C, H_out, W_out}, input.options());
+
+    max_pooling_2D_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, C, H, W,
+        kernel_size, stride, padding
+    );
+    return output;
+}
+
+
+
+
+
+
+torch::Tensor batch_norm(
+    const torch::Tensor& input,
+    const torch::Tensor& gamma,
+    const torch::Tensor& beta,
+    float eps
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(gamma.ndimension() == 1, "Gamma must be 1D");
+    TORCH_CHECK(beta.ndimension() == 1, "Beta must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(gamma.device().is_cuda(), "Gamma must be on CUDA");
+    TORCH_CHECK(beta.device().is_cuda(), "Beta must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(gamma.dtype() == torch::kFloat32, "Gamma must be of type float32");
+    TORCH_CHECK(beta.dtype() == torch::kFloat32, "Beta must be of type float32");
+    TORCH_CHECK(input.size(1) == gamma.size(0), "Input and gamma must have compatible shapes");
+    TORCH_CHECK(input.size(1) == beta.size(0), "Input and beta must have compatible shapes");
+
+    int N = input.size(0);
+    int D = input.size(1);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N, D}, options);
+
+    batch_norm_cuda(
+        input.data_ptr<float>(),
+        gamma.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, D, eps
+    );
+
+    return output;
+}
+
+
+
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
     m.def("matmul", &matrix_multiplication, "Matrix Multiplication (CUDA)");
@@ -802,4 +1051,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("topk_1D", &topk_1D, "TopK (CUDA)");
     m.def("batched_matmul", &batched_matmul, "Batched Matrix Multiplication (CUDA)");
     m.def("int8_quantized_matmul", &int8_quantized_matmul, "Int8 Quantized Matrix Multiplication (CUDA)");
+    m.def("ordinary_least_squares", &ordinary_least_squares, "Ordinary Least Squares (CUDA)");
+    m.def("logistic_regression", &logistic_regression, "Logistic Regression (CUDA)");
+    m.def("monte_carlo_integration", &monte_carlo_integration, "Monte Carlo Integration (CUDA)");
+    m.def("sorting", &sorting, "Sorting (CUDA)");
+    m.def("radix_sort", &radix_sort, "Radix Sort (CUDA)");
+    m.def("matrix_power", &matrix_power, "Matrix Power (CUDA)");
+    m.def("nearest_neighbor", &nearest_neighbor, "Nearest Neighbor (CUDA)");
+    m.def("batch_norm", &batch_norm, "Batch Normalization (CUDA)");
+    m.def("max_pooling_2D", &max_pooling_2D, "Max Pooling 2D (CUDA)");
 }

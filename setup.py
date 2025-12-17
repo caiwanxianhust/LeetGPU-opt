@@ -38,6 +38,15 @@ setup(
                 "src/topk_selection.cu",  # 添加 topk_selection.cu
                 "src/batched_matrix_multiplication.cu",  # 添加 batched_matrix_multiplication.cu
                 "src/int8_quantized_matmul.cu",
+                "src/ordinary_least_squares.cu",  # 添加 ordinary_least_squares.cu
+                "src/logistic_regression.cu",
+                "src/monte_carlo_integration.cu",
+                "src/sorting.cu",
+                "src/radix_sort.cu",  # 添加 radix_sort.cu
+                "src/matrix_power.cu",  # 添加 matrix_power.cu
+                "src/nearest_neighbor.cu",  # 添加 nearest_neighbor.cu
+                "src/batch_norm.cu",  # 添加 batch_norm.cu
+                "src/max_pooling_2D.cu", # 添加 max_pooling_2D.cu
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [
