@@ -47,6 +47,10 @@ setup(
                 "src/nearest_neighbor.cu",  # 添加 nearest_neighbor.cu
                 "src/batch_norm.cu",  # 添加 batch_norm.cu
                 "src/max_pooling_2D.cu", # 添加 max_pooling_2D.cu
+                "src/count_array_element_3D.cu",  # 添加 count_array_element_3D.cu
+                "src/subarray_sum.cu",
+                "src/subarray_sum_2D.cu",
+                "src/subarray_sum_3D.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

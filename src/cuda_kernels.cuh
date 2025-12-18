@@ -35,6 +35,14 @@ static __device__ float warp_all_reduce_sum(float val) {
     return val;
 }
 
+static __device__ int warp_all_reduce_sum(int val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_xor_sync(0xffffffff, val, offset);
+    }
+    return val;
+}
+
 
 static __device__ MD_F warp_all_reduce_sum_mdf(MD_F val) {
     MD_F b;
@@ -60,6 +68,29 @@ static __device__ float block_all_reduce_sum(float val) {
     __syncthreads();
 
     val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : 0.0f;
+    val = warp_all_reduce_sum(val);
+
+    if (threadIdx.x == 0) {
+        ret = val;
+    }
+    __syncthreads();
+    
+    return ret;
+}
+
+static __device__ int block_all_reduce_sum(int val) {
+    __shared__ int ret;
+    __shared__ int shared[32]; // Assuming max 1024 threads per block
+    int lane = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+
+    val = warp_all_reduce_sum(val);
+    if (lane == 0) {
+        shared[warp_id] = val;
+    }
+    __syncthreads();
+
+    val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : 0;
     val = warp_all_reduce_sum(val);
 
     if (threadIdx.x == 0) {

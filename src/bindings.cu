@@ -159,6 +159,24 @@ void max_pooling_2D_cuda(
     const float* input, float* output, int N, int C, int H, int W, int kernel_size, int stride, int padding
 );
 
+void count_array_element_3D_cuda(
+    const int* input, int* output, int N, int M, int K, int P
+);
+
+
+void subarray_sum_cuda(
+    const int* input, int* output, int N, int S, int E
+);
+
+void subarray_sum_2D_cuda(
+    const int* input, int* output, int N, int M, int S_ROW, int E_ROW, int S_COL, int E_COL
+);
+
+void subarray_sum_3D_cuda(
+    const int* input, int* output, int N, int M, int K, int S_DEP, int E_DEP, int S_ROW, int E_ROW, int S_COL, int E_COL
+);
+
+
 
 
 // -------------------------- Python 绑定函数 --------------------------
@@ -979,10 +997,6 @@ torch::Tensor max_pooling_2D(
 }
 
 
-
-
-
-
 torch::Tensor batch_norm(
     const torch::Tensor& input,
     const torch::Tensor& gamma,
@@ -1018,6 +1032,96 @@ torch::Tensor batch_norm(
 }
 
 
+torch::Tensor count_equal_3D(
+    const torch::Tensor& input,
+    const int n, const int m, const int k,
+    const int p
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(input.size(0) == n * m * k, "Input must be a 3D matrix");
+
+    torch::Tensor output = torch::zeros({1}, input.options());
+
+    count_array_element_3D_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, m, k, p
+    );
+
+    return output;
+}
+
+
+torch::Tensor subarray_sum(
+    const torch::Tensor& input,
+    const int S, const int E
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(input.size(0) >= S && input.size(0) >= E, "Invalid range");
+    TORCH_CHECK(S < E, "Invalid range");
+
+    int n = input.size(0);
+    torch::Tensor output = torch::zeros({1}, input.options());
+    subarray_sum_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, S, E
+    );
+    return output;
+}
+
+
+torch::Tensor subarray_sum_2D(
+    const torch::Tensor& input,
+    const int S_ROW, const int E_ROW, const int S_COL, const int E_COL
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(E_ROW >= S_ROW && input.size(0) >= E_ROW, "Invalid range");
+    TORCH_CHECK(E_COL >= S_COL && input.size(1) >= E_COL, "Invalid range");
+
+    int n = input.size(0);
+    int m = input.size(1);
+    
+    torch::Tensor output = torch::zeros({1}, input.options());
+    subarray_sum_2D_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, m,
+        S_ROW, E_ROW, S_COL, E_COL
+    );
+    return output;
+}
+
+
+torch::Tensor subarray_sum_3D(
+    const torch::Tensor& input,
+    const int S_DEP, const int E_DEP, const int S_ROW, const int E_ROW, const int S_COL, const int E_COL
+) {
+    TORCH_CHECK(input.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(E_DEP >= S_DEP && input.size(0) >= E_DEP, "Invalid range");
+    TORCH_CHECK(E_ROW >= S_ROW && input.size(1) >= E_ROW, "Invalid range");
+    TORCH_CHECK(E_COL >= S_COL && input.size(2) >= E_COL, "Invalid range");
+
+    int n = input.size(0);
+    int m = input.size(1);
+    int k = input.size(2);
+    torch::Tensor output = torch::empty({1}, input.options());
+    subarray_sum_3D_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, m, k,
+        S_DEP, E_DEP, S_ROW, E_ROW, S_COL, E_COL
+    );
+    return output;
+}
 
 
 
@@ -1060,4 +1164,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("nearest_neighbor", &nearest_neighbor, "Nearest Neighbor (CUDA)");
     m.def("batch_norm", &batch_norm, "Batch Normalization (CUDA)");
     m.def("max_pooling_2D", &max_pooling_2D, "Max Pooling 2D (CUDA)");
+    m.def("count_equal_3D", &count_equal_3D, "Count Equal 3D (CUDA)");
+    m.def("subarray_sum", &subarray_sum, "Subarray Sum (CUDA)");
+    m.def("subarray_sum_2D", &subarray_sum_2D, "Subarray Sum 2D (CUDA)");
+    m.def("subarray_sum_3D", &subarray_sum_3D, "Subarray Sum 3D (CUDA)");
 }

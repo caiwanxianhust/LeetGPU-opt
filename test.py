@@ -278,7 +278,7 @@ def count_array_elements():
 
 def count_array_elements_2D():
     # 测试
-    x = torch.randint(-127, 127, (1025, 2049), device="cuda", dtype=torch.int32)
+    x = torch.randint(-127, 127, (1024, 10000), device="cuda", dtype=torch.int32)
     K = 0
 
     # 用 pytorch 实现
@@ -286,7 +286,7 @@ def count_array_elements_2D():
 
     # 用 leetgpu 实现
     start_time = time.time()
-    out = leetgpu.count_equal_2D(x.flatten(), 1025, 2049, K)
+    out = leetgpu.count_equal_2D(x.flatten(), 1024, 10000, K)
     elapse_time = time.time() - start_time
     print(f"CUDA Time taken: {elapse_time * 1000} ms")
 
@@ -1148,7 +1148,119 @@ def maxpooling_2D():
     compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
 
 
+def count_array_elements_3D():
+    # 测试
+    N = 32
+    M = 32
+    K = 10000
+    P = 0
+    # x = [P if (i%10== 0) else -1 for i in range(N * M * K)]
+    x = torch.randint(-200, 200, (N * M * K, ), device="cuda", dtype=torch.int32)
+    # x = torch.tensor(x, device="cuda", dtype=torch.int32)
 
+    # 用 PyTorch 实现
+    # 统计 x 中值等于 P 的元素个数
+    torch_out = torch.sum(x == P).view(1).int()
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.count_equal_3D(x, N, M, K, P)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x.view(N, M, K)[:4, :4, :4])
+    print("Count Equal Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+def subarray_sum():
+    # 测试
+    N = 1024000000
+    S = 10
+    E = 5000
+    x = torch.randint(1, 10, (N,), device="cuda", dtype=torch.int32)
+
+    # 用 PyTorch 实现
+    torch_out = torch.sum(x[S:(E+1)]).view(1).int()
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.subarray_sum(x, S, E)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:4])
+    print("Subarray Sum")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+def subarray_sum_2D():
+    # 测试
+    N = 1000
+    M = 820
+    S_ROW, S_COL = 100, 100
+    E_ROW, E_COL = 700, 400
+    x = torch.randint(1, 10, (N, M), device="cuda", dtype=torch.int32)
+
+    # 用 PyTorch 实现
+    torch_out = torch.sum(x[S_ROW:E_ROW+1, S_COL:E_COL+1]).view(1).int()
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.subarray_sum_2D(x, S_ROW, E_ROW, S_COL, E_COL)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:4, :4])
+    print("Subarray Sum")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+def subarray_sum_3D():
+    # 测试
+    N = 1000
+    M = 1000
+    K = 1000
+    S_ROW, S_COL, S_DEP = 100, 100, 100
+    E_ROW, E_COL, E_DEP = 120, 110, 115
+    x = torch.randint(1, 10, (N, M, K), device="cuda", dtype=torch.int32)
+
+    # 用 PyTorch 实现
+    torch_out = torch.sum(x[S_DEP:E_DEP+1, S_ROW:E_ROW+1, S_COL:E_COL+1]).view(1).int()
+
+    # 用 LeetGPU 实现
+    start_time = time.time()
+    out = leetgpu.subarray_sum_3D(x, S_DEP, E_DEP, S_ROW, E_ROW, S_COL, E_COL)
+    elapse_time = time.time() - start_time
+    print(f"CUDA Time taken: {elapse_time * 1000} ms")
+
+    # 打印结果
+    print("X")
+    print(x[:4, :4, :4])
+    print("Subarray Sum")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
 
 
 if __name__ == "__main__":
@@ -1189,4 +1301,8 @@ if __name__ == "__main__":
     # matrix_power()
     # nearest_neighbor()
     # batch_norm()
-    maxpooling_2D()
+    # maxpooling_2D()
+    # count_array_elements_3D()
+    # subarray_sum()
+    # subarray_sum_2D()
+    subarray_sum_3D()
