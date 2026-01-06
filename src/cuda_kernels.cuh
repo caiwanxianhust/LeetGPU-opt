@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cfloat>
+#include <stdint.h>
 
 
 struct __align__(8) MD_F
@@ -42,6 +43,32 @@ static __device__ int warp_all_reduce_sum(int val) {
     }
     return val;
 }
+
+static __device__ double warp_all_reduce_sum(double val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_xor_sync(0xffffffff, val, offset);
+    }
+    return val;
+}
+
+static __device__ int warp_all_reduce_max(int val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val = max(val, __shfl_xor_sync(0xffffffff, val, offset));
+    }
+    return val;
+}
+
+
+static __device__ float warp_all_reduce_max(float val) {
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val = max(val, __shfl_xor_sync(0xffffffff, val, offset));
+    }
+    return val;
+}
+
 
 
 static __device__ MD_F warp_all_reduce_sum_mdf(MD_F val) {
@@ -101,6 +128,29 @@ static __device__ int block_all_reduce_sum(int val) {
     return ret;
 }
 
+static __device__ double block_all_reduce_sum(double val) {
+    __shared__ double ret;
+    __shared__ double shared[32]; // Assuming max 1024 threads per block
+    int lane = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+
+    val = warp_all_reduce_sum(val);
+    if (lane == 0) {
+        shared[warp_id] = val;
+    }
+    __syncthreads();
+
+    val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : 0.0;
+    val = warp_all_reduce_sum(val);
+
+    if (threadIdx.x == 0) {
+        ret = val;
+    }
+    __syncthreads();
+    
+    return ret;
+}
+
 
 static __device__ MD_F block_all_reduce_sum_mdf(MD_F val) {
     __shared__ MD_F s_buf[32];
@@ -127,3 +177,48 @@ static __device__ MD_F block_all_reduce_sum_mdf(MD_F val) {
     return result;
 }
 
+static __device__ int block_all_reduce_max(int val) {
+    __shared__ int ret;
+    __shared__ int shared[32]; // Assuming max 1024 threads per block
+    int lane = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+
+    val = warp_all_reduce_max(val);
+    if (lane == 0) {
+        shared[warp_id] = val;
+    }
+    __syncthreads();
+
+    val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : -INT_MAX;
+    val = warp_all_reduce_max(val);
+
+    if (threadIdx.x == 0) {
+        ret = val;
+    }
+    __syncthreads();
+    
+    return ret;
+}
+
+static __device__ float block_all_reduce_max(float val) {
+    __shared__ float ret;
+    __shared__ float shared[32]; // Assuming max 1024 threads per block
+    int lane = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+
+    val = warp_all_reduce_max(val);
+    if (lane == 0) {
+        shared[warp_id] = val;
+    }
+    __syncthreads();
+
+    val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : -FLT_MAX;
+    val = warp_all_reduce_max(val);
+
+    if (threadIdx.x == 0) {
+        ret = val;
+    }
+    __syncthreads();
+    
+    return ret;
+}

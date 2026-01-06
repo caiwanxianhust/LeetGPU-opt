@@ -176,6 +176,38 @@ void subarray_sum_3D_cuda(
     const int* input, int* output, int N, int M, int K, int S_DEP, int E_DEP, int S_ROW, int E_ROW, int S_COL, int E_COL
 );
 
+void rms_norm_cuda(
+    const float* input, float gamma, float beta, float* output, int N, float eps
+);
+
+void max_subarray_sum_cuda(
+    const int* input, int* output, int N, int window_size
+); 
+
+void attention_with_linear_bias_cuda(
+    const float* Q, const float* K, const float* V, float* output, int M, int N, int d, float alpha
+);
+
+void batched_matrix_mul_fp16_cuda(
+    const half* A, const half* B, half* C, int BATCH, int M, int N, int K
+);
+
+void dot_product_fp16_cuda(
+    const half* A, const half* B, half* result, int N
+);
+
+void rope_embedding_cuda(
+    float* Q, float* cos, float* sin, float* output, int M, int D
+);
+
+void conv3D_cuda(
+    const float* input, const float* kernel, float* output, int input_depth,
+    int input_rows, int input_cols, int kernel_depth, int kernel_rows, int kernel_cols
+); 
+
+void mha_cuda(
+    const float* Q, const float* K, const float* V, float* output, int N, int d_model, int h
+); 
 
 
 
@@ -1124,6 +1156,249 @@ torch::Tensor subarray_sum_3D(
 }
 
 
+torch::Tensor rms_norm_1D(
+    const torch::Tensor& input,
+    float eps, float gamma, float beta
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+    rms_norm_cuda(
+        input.data_ptr<float>(),
+        gamma,
+        beta,
+        output.data_ptr<float>(),
+        N,
+        eps
+    );
+    return output;
+}
+
+
+torch::Tensor max_subarray_sum(
+    const torch::Tensor& input,
+    const int window_size
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(window_size > 0 && window_size <= input.size(0), "Invalid window size");
+
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({1}, options);
+    max_subarray_sum_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        N,
+        window_size
+    );
+    return output;
+}
+
+
+torch::Tensor attention_with_linear_bias(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    float alpha
+) { 
+    TORCH_CHECK(Q.ndimension() == 2, "Input Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "Input K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "Input V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Input Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "Input K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "Input V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Input Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "Input K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "Input V must be of type float32");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Input tensors must have compatible shapes");
+    TORCH_CHECK(V.size(1) == K.size(1), "Input tensors must have compatible shapes");
+    TORCH_CHECK(K.size(0) == V.size(0), "Input tensors must have compatible shapes");
+    int M = Q.size(0), N = K.size(0), d = Q.size(1);
+    auto options = Q.options();
+    torch::Tensor output = torch::empty({M, d}, options);
+    attention_with_linear_bias_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, N, d,
+        alpha
+    );
+    return output;
+}
+
+
+torch::Tensor batched_matrix_mul_fp16(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 3, "Input A must be 3D");
+    TORCH_CHECK(B.ndimension() == 3, "Input B must be 3D    ");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have compatible shapes");
+    TORCH_CHECK(A.size(2) == B.size(1), "Input tensors must have compatible shapes");
+    TORCH_CHECK(A.dtype() == torch::kFloat16, "Input A must be of type float16");
+    TORCH_CHECK(B.dtype() == torch::kFloat16, "Input B must be of type float16");
+
+    int BATCH = A.size(0), M = A.size(1), K = A.size(2), N = B.size(2);
+    torch::Tensor C = torch::empty({BATCH, M, N}, A.options());
+    batched_matrix_mul_fp16_cuda(
+        reinterpret_cast<half*>(A.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(C.data_ptr<at::Half>()),
+        BATCH, M, N, K
+    );
+    return C;
+}
+
+
+torch::Tensor dot_product_fp16(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 1, "Input A must be 1D");
+    TORCH_CHECK(B.ndimension() == 1, "Input B must be 1D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat16, "Input A must be of type float16");
+    TORCH_CHECK(B.dtype() == torch::kFloat16, "Input B must be of type float16");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have the same size");
+
+    int N = A.size(0);
+    auto options = A.options();
+    torch::Tensor result = torch::zeros({1}, options.dtype(torch::kFloat16));
+
+    dot_product_fp16_cuda(
+        reinterpret_cast<const half*>(A.data_ptr<at::Half>()),
+        reinterpret_cast<const half*>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(result.data_ptr<at::Half>()),
+        N
+    );
+
+    return result;
+}
+
+
+torch::Tensor rope_embedding(
+    const torch::Tensor& input,
+    const torch::Tensor& cos_table,
+    const torch::Tensor& sin_table
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(cos_table.ndimension() == 2, "cos_table must be 2D");
+    TORCH_CHECK(sin_table.ndimension() == 2, "sin_table must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(cos_table.device().is_cuda(), "cos_table must be on CUDA");
+    TORCH_CHECK(sin_table.device().is_cuda(), "sin_table must be on CUDA");
+    TORCH_CHECK(input.size(0) == cos_table.size(0), "Input and cos_table must have the same number of rows");
+    TORCH_CHECK(input.size(0) == sin_table.size(0), "Input and sin_table must have the same number of rows");
+    TORCH_CHECK(input.size(1) == cos_table.size(1), "Input and cos_table must have the same number of columns");
+    TORCH_CHECK(input.size(1) == sin_table.size(1), "Input and sin_table must have the same number of columns");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(cos_table.dtype() == torch::kFloat32, "cos_table must be of type float32");
+    TORCH_CHECK(sin_table.dtype() == torch::kFloat32, "sin_table must be of type float32");
+    TORCH_CHECK(input.size(1) % 2 == 0, "input must have an even number of columns");
+
+    int M = input.size(0);
+    int D = input.size(1);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({M, D}, options);
+
+    rope_embedding_cuda(
+        input.data_ptr<float>(),
+        cos_table.data_ptr<float>(),
+        sin_table.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, D
+    );
+    
+    return output;
+}
+
+
+torch::Tensor conv3D(
+    const torch::Tensor& input,
+    const torch::Tensor& kernel
+) { 
+    TORCH_CHECK(input.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(kernel.ndimension() == 3, "Kernel must be 3D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(kernel.device().is_cuda(), "Kernel must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(kernel.dtype() == torch::kFloat32, "Kernel must be of type float32");
+
+    int input_depth = input.size(0);
+    int input_rows = input.size(1);
+    int input_cols = input.size(2);
+    int kernel_depth = kernel.size(0);
+    int kernel_rows = kernel.size(1);
+    int kernel_cols = kernel.size(2);
+
+    TORCH_CHECK(kernel_depth <= input_depth && kernel_rows <= input_rows && kernel_cols <= input_cols, 
+        "Kernel dimensions must be less than or equal to input dimensions");
+    
+    int output_depth = input_depth - kernel_depth + 1;
+    int output_rows = input_rows - kernel_rows + 1;
+    int output_cols = input_cols - kernel_cols + 1;
+    torch::Tensor output = torch::empty({output_depth, output_rows, output_cols}, input.options());
+    conv3D_cuda(
+        input.data_ptr<float>(),
+        kernel.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input_depth, input_rows, input_cols,
+        kernel_depth, kernel_rows, kernel_cols
+    );
+
+    return output;
+}
+
+
+torch::Tensor mha(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    const int heads
+) { 
+    TORCH_CHECK(Q.ndimension() == 2, "Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.size(0) == K.size(0), "Q and K must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Q and K must have the same number of columns");
+    TORCH_CHECK(Q.size(0) == V.size(0), "Q and V must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == V.size(1), "Q and V must have the same number of columns");
+    TORCH_CHECK(Q.size(1) % heads == 0, "Q size must be divisible by heads");
+
+    int N = Q.size(0);
+    int d_model = Q.size(1);
+    
+    torch::Tensor output = torch::zeros({N, d_model}, Q.options());
+    torch::Tensor attn_scores = torch::zeros({heads, N, N}, Q.options());
+    mha_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, d_model, heads
+    );
+
+    return output;
+}
+
+
+
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
@@ -1168,4 +1443,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("subarray_sum", &subarray_sum, "Subarray Sum (CUDA)");
     m.def("subarray_sum_2D", &subarray_sum_2D, "Subarray Sum 2D (CUDA)");
     m.def("subarray_sum_3D", &subarray_sum_3D, "Subarray Sum 3D (CUDA)");
+    m.def("rms_norm_1D", &rms_norm_1D, "RMS Norm (CUDA)");
+    m.def("max_subarray_sum", &max_subarray_sum, "Max Subarray Sum (CUDA)");
+    m.def("attention_with_linear_bias", &attention_with_linear_bias, "Attention with Linear Bias (CUDA)");
+    m.def("batched_matrix_mul_fp16", &batched_matrix_mul_fp16, "Batched Matrix Multiplication (FP16) (CUDA)");
+    m.def("dot_product_fp16", &dot_product_fp16, "Dot Product (FP16) (CUDA)");
+    m.def("rope_embedding", &rope_embedding, "Rope Embedding (CUDA)");
+    m.def("conv3D", &conv3D, "Convolution 3D (CUDA)");
+    m.def("mha", &mha, "Multi-Head Attention (CUDA)");
 }

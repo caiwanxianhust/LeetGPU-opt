@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <stdio.h>
 
 
 /*
@@ -48,7 +49,7 @@ __global__ void subarray_sum_3D_kernel(
     int dep_idx = blockIdx.y + S_DEP;
     int row_idx = blockIdx.x + S_ROW;
     int col_idx = threadIdx.x + S_COL;
-    if (dep_idx > E_DEP || row_idx > E_ROW || col_idx > E_COL) { 
+    if (dep_idx > E_DEP || row_idx > E_ROW) { 
         return;
     }
     int vsum = 0;
@@ -57,10 +58,16 @@ __global__ void subarray_sum_3D_kernel(
     }
     __syncthreads();
 
+    // if (dep_idx == 0 && row_idx == 0) {
+    //     printf("blockidx: %d, blockidy: %d, threadidx: %d, vsum: %d\n", blockIdx.x, blockIdx.y, threadIdx.x, vsum);
+    // }
+
     vsum = block_all_reduce_sum(vsum);
 
     if (threadIdx.x == 0) {
-        atomicAdd(output, vsum);
+        // printf("dep_idx: %d, row_idx: %d, vsum: %d\n", dep_idx, row_idx, vsum);
+        int out = atomicAdd(output, vsum);
+        // printf("dep_idx: %d, row_idx: %d, out: %d vsum %d\n", dep_idx, row_idx, out, vsum);
     }
 }
 

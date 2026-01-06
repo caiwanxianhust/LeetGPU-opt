@@ -51,6 +51,14 @@ setup(
                 "src/subarray_sum.cu",
                 "src/subarray_sum_2D.cu",
                 "src/subarray_sum_3D.cu",
+                "src/rms_norm.cu",
+                "src/max_subarray_sum.cu",
+                "src/attention_with_linear_bias.cu",
+                "src/batched_matrix_mul_fp16.cu",
+                "src/dot_product_fp16.cu",
+                "src/rope_embedding.cu",
+                "src/conv3D.cu",
+                "src/mha.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [
