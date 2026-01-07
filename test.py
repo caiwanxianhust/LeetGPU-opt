@@ -1533,7 +1533,7 @@ def conv3D():
 
 def mha():
     # 测试
-    N = 1299
+    N = 1299                                                             
     d_model = 200
     num_heads = 8
 
@@ -1567,6 +1567,52 @@ def mha():
     print("V")
     print(v[:4, :4])
     print("MHA Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-4, rtol=1e-4, max_print=10)
+
+
+def multi_agent_simulation():
+    # 测试
+    N = 10000
+    x = torch.randn(N, 4, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    torch_out = torch.zeros(N, 4, device="cuda", dtype=torch.float32)
+    for i in range(N):
+        num_neighbors = 0
+        avg_velocity = torch.zeros(2, device="cuda", dtype=torch.float32)
+        for j in range(N):
+            if (i == j): 
+                continue
+            distance = x[i, :2] - x[j, :2]
+            dist_squared = distance.pow(2).sum()
+            if (dist_squared < 25.0):
+                num_neighbors += 1
+                avg_velocity += x[j, 2:]
+        
+        if (num_neighbors > 0):
+            avg_velocity /= num_neighbors
+        else:
+            avg_velocity = x[i, 2:]
+
+        torch_out[i, 2:] = x[i, 2:] + 0.05 * (avg_velocity - x[i, 2:])
+        torch_out[i, :2] = x[i, :2] + torch_out[i, 2:]
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_multi_agent_simulation(x):
+        out = leetgpu.multi_agent_sim(x)
+        return out
+    
+    out = leetgpu_multi_agent_simulation(x)
+
+    # 打印结果
+    print("X")
+    print(x[:4, :4])
+    print("Multi-Agent Simulation Result")
     print(out)
     print(torch_out)
 
@@ -1626,4 +1672,5 @@ if __name__ == "__main__":
     # dot_product_fp16()
     # rope_embedding()
     # conv3D()
-    mha()
+    # mha()
+    multi_agent_simulation()

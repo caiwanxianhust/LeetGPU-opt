@@ -59,6 +59,7 @@ setup(
                 "src/rope_embedding.cu",
                 "src/conv3D.cu",
                 "src/mha.cu",
+                "src/multi_agent_simulation.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

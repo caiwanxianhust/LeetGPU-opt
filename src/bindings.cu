@@ -209,6 +209,10 @@ void mha_cuda(
     const float* Q, const float* K, const float* V, float* output, int N, int d_model, int h
 ); 
 
+void multi_agent_sim_cuda(
+    const float* agents, float* agents_next, int N
+); 
+
 
 
 // -------------------------- Python 绑定函数 --------------------------
@@ -1397,6 +1401,27 @@ torch::Tensor mha(
 }
 
 
+torch::Tensor multi_agent_sim(
+    const torch::Tensor& agents
+) {
+    TORCH_CHECK(agents.ndimension() == 2, "Agents must be 2D");
+    TORCH_CHECK(agents.device().is_cuda(), "Agents must be on CUDA");
+    TORCH_CHECK(agents.dtype() == torch::kFloat32, "Agents must be of type float32");
+    TORCH_CHECK(agents.size(1) == 4, "Each agent must have 4 attributes (x, y, vx, vy)");
+
+    int N = agents.size(0);
+    auto options = agents.options();
+    torch::Tensor updated_agents = torch::empty({N, 4}, options);
+
+    multi_agent_sim_cuda(
+        agents.data_ptr<float>(),
+        updated_agents.data_ptr<float>(),
+        N
+    );
+
+    return updated_agents;
+}
+
 
 
 
@@ -1451,4 +1476,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("rope_embedding", &rope_embedding, "Rope Embedding (CUDA)");
     m.def("conv3D", &conv3D, "Convolution 3D (CUDA)");
     m.def("mha", &mha, "Multi-Head Attention (CUDA)");
+    m.def("multi_agent_sim", &multi_agent_sim, "Multi-Agent Simulation (CUDA)");
 }
