@@ -1821,6 +1821,53 @@ def linear_self_attention():
     compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
+def sliding_window_self_attention():
+    # 测试
+    # Q = [[-1.0, 2.0, -3.0], [4.0, -5.0, 6.0], [-7.0, 8.0, -9.0], [10.0, -11.0, 12.0]]
+    # K = [[2.0, -1.0, 3.0], [-4.0, 5.0, -6.0], [7.0, -8.0, 9.0], [-10.0, 11.0, -12.0]]
+    # V = [[1.0, 0.5, -0.5], [-1.0, 2.0, 3.0], [4.0, -2.0, 1.0], [0.0, 1.0, -1.0]]
+    # Q = torch.tensor(Q, device="cuda", dtype=torch.float32)
+    # K = torch.tensor(K, device="cuda", dtype=torch.float32)
+    # V = torch.tensor(V, device="cuda", dtype=torch.float32)
+    # window_size = 2
+    # M, dmodel = Q.shape
+    M = 5000
+    dmodel = 128
+    Q = torch.rand(M, dmodel, device="cuda", dtype=torch.float32) * 100.0 - 50.0
+    K = torch.rand(M, dmodel, device="cuda", dtype=torch.float32) * 100.0 - 50.0
+    V = torch.rand(M, dmodel, device="cuda", dtype=torch.float32) * 100.0 - 50.0
+    window_size = 16
+
+    # 用 PyTorch 实现
+    torch_out = torch.zeros_like(Q)
+    for i in range(M):
+        start = max(0, i - window_size)
+        end = min(M, i + window_size + 1)
+        qk = torch.matmul(Q[i:i+1], K[start:end].transpose(0, 1)) / math.sqrt(dmodel)
+        attn_score = torch.softmax(qk, dim=-1)
+        torch_out[i:i+1] = torch.matmul(attn_score, V[start:end])
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_sliding_window_self_attention(Q, K, V, window_size):
+        out = leetgpu.sliding_window_self_attention(Q, K, V, window_size)
+        return out
+    
+    out = leetgpu_sliding_window_self_attention(Q, K, V, window_size)
+
+    # 打印结果
+    print("Q")
+    print(Q)
+    print("K")
+    print(K)
+    print("V")
+    print(V)
+    print("Sliding Window Self-Attention Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
 
@@ -1880,4 +1927,5 @@ if __name__ == "__main__":
     # multi_agent_simulation()
     # kmeans_clustering()
     # causal_self_attention()
-    linear_self_attention()
+    # linear_self_attention()
+    sliding_window_self_attention()
