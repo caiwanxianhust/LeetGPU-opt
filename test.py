@@ -1620,6 +1620,210 @@ def multi_agent_simulation():
     compare_tensors(out, torch_out, atol=1e-4, rtol=1e-4, max_print=10)
 
 
+def kmeans_clustering():
+    # 测试
+    # 数据点数量
+    N = 2000
+    # 聚类中心数量
+    k = 50
+    # 迭代次数
+    max_iterations = 10
+    # 数据点 x 坐标
+    data_x = torch.randn(N, device="cuda", dtype=torch.float32)
+    # 数据点 y 坐标
+    data_y = torch.randn(N, device="cuda", dtype=torch.float32)
+    # 聚类中心 x 坐标
+    centers_x = torch.randn(k, device="cuda", dtype=torch.float32)
+    # 聚类中心 y 坐标
+    centers_y = torch.randn(k, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    # 针对数据集中每个样本  计算它到 k 个聚类中心的距离并将其分到距离最小的聚类中心所对应的类中，构成聚类结果 C(t)；
+    # 计算新的类中心。对聚类结果 C(t)，计算每个类中的样本均值，作为类的新的中心；
+     # 复制初始中心点
+    curr_centers_x = centers_x.clone()
+    curr_centers_y = centers_y.clone()
+    
+    data_points = torch.stack([data_x, data_y], dim=1)  # (N, 2)
+    centers = torch.stack([curr_centers_x, curr_centers_y], dim=1)  # (k, 2)
+
+    for iteration in range(max_iterations):
+        # 计算每个点到每个中心的距离
+        # data_points: (N, 2) -> (N, 1, 2)
+        # centers: (k, 2) -> (1, k, 2)
+        # distances: (N, k)
+        distances = (data_points.unsqueeze(1) - centers.unsqueeze(0)) ** 2
+        distances = distances.sum(dim=2)  # (N, k)
+
+        # 找到最近的聚类中心
+        labels = torch.argmin(distances, dim=1)  # (N,)
+        
+        # 更新聚类中心
+        new_centers_x = torch.zeros_like(curr_centers_x)
+        new_centers_y = torch.zeros_like(curr_centers_y)
+        counts = torch.zeros(k, device=data_x.device, dtype=torch.float32)
+        
+        # 累加每个类别的点的坐标
+        for i in range(k):
+            mask = (labels == i)
+            counts[i] = mask.sum()
+            if counts[i] > 0:
+                new_centers_x[i] = data_x[mask].sum() / counts[i]
+                new_centers_y[i] = data_y[mask].sum() / counts[i]
+            else:
+                # 如果某类没有点，则保留原中心
+                new_centers_x[i] = curr_centers_x[i]
+                new_centers_y[i] = curr_centers_y[i]
+        
+        curr_centers_x = new_centers_x
+        curr_centers_y = new_centers_y
+        centers = torch.stack([curr_centers_x, curr_centers_y], dim=1)  # (k, 2)
+
+    # 返回最终的标签和中心点
+    torch_labels = labels.to(torch.int32)
+    torch_final_centers_x = curr_centers_x
+    torch_final_centers_y = curr_centers_y
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_kmeans_clustering(data_x, data_y, init_centers_x, init_centers_y, max_iter):
+        labels, final_centers_x, final_centers_y = leetgpu.kmeans_clustering(
+            data_x, data_y, init_centers_x, init_centers_y, max_iter
+        )
+        return labels, final_centers_x, final_centers_y
+
+    gpu_labels, gpu_final_centers_x, gpu_final_centers_y = leetgpu_kmeans_clustering(
+        data_x, data_y, centers_x, centers_y, max_iterations
+    )
+
+    # 打印结果
+    print("Data Points (first 10)")
+    print(data_x[:10])
+    print(data_y[:10])
+    print("Initial Centers")
+    print(centers_x)
+    print(centers_y)
+    print("Final Centers (PyTorch)")
+    print(torch_final_centers_x)
+    print(torch_final_centers_y)
+    print("Labels (first 10)")
+    print(torch_labels[:10])
+    print("Final Centers (GPU)")
+    print(gpu_final_centers_x)
+    print(gpu_final_centers_y)
+    print("Labels (GPU, first 10)")
+    print(gpu_labels[:10])
+
+    # 检查结果
+    compare_tensors(gpu_labels, torch_labels, atol=1e-4, rtol=1e-4, max_print=10)
+    compare_tensors(gpu_final_centers_x, torch_final_centers_x, atol=1e-4, rtol=1e-4, max_print=10)
+    compare_tensors(gpu_final_centers_y, torch_final_centers_y, atol=1e-4, rtol=1e-4, max_print=10)
+
+
+def causal_self_attention():
+    # 测试
+    M = 500
+    dmodel = 128
+    # All elements in Q, K, and V are sampled from [-100.0, 100.0]，即元素范围在-100到100之间
+    Q = torch.rand(M, dmodel, device="cuda", dtype=torch.float32) * 100.0 - 50.0
+    K = torch.rand(M, dmodel, device="cuda", dtype=torch.float32) * 100.0 - 50.0
+    V = torch.rand(M, dmodel, device="cuda", dtype=torch.float32) * 100.0 - 50.0
+
+    # 用 PyTorch 实现
+    qk = torch.matmul(Q, K.transpose(0, 1))
+    qk = qk / math.sqrt(dmodel)
+    # 对角线之后的元素为负无穷 masked(a_{ij}) = a_{ij} if i >= j else -inf
+    mask = torch.triu(torch.ones(M, M, device="cuda", dtype=torch.float32), diagonal=1) * -1e9
+    qk += mask
+    attn_score = torch.softmax(qk, dim=-1)
+    torch_out = torch.matmul(attn_score, V)
+    
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_causal_self_attention(Q, K, V):
+        out = leetgpu.causal_self_attention(Q, K, V)
+        return out
+    
+    out = leetgpu_causal_self_attention(Q, K, V)
+
+    # 打印结果
+    print("Q")
+    print(Q[:4, :4])
+    print("K")
+    print(K[:4, :4])
+    print("V")
+    print(V[:4, :4])
+    print("Causal Self-Attention Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def linear_self_attention():
+    # 测试
+    # Q = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+    # K = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+    # V = [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]
+    # Q = torch.tensor(Q, device="cuda", dtype=torch.float32)
+    # K = torch.tensor(K, device="cuda", dtype=torch.float32)
+    # V = torch.tensor(V, device="cuda", dtype=torch.float32)
+    M = 10000
+    dmodel = 128
+    Q = torch.rand(M, dmodel, device="cuda", dtype=torch.float32)
+    K = torch.rand(M, dmodel, device="cuda", dtype=torch.float32)
+    V = torch.rand(M, dmodel, device="cuda", dtype=torch.float32)
+ 
+    # 用 PyTorch 实现
+    # x+1 if x > 0 else exp(x)
+    def elu(x):
+        return torch.where(x > 0, x + 1, torch.exp(x))
+
+    elu_kt = elu(K.transpose(0, 1))
+    # print("elu_kt")
+    # print(elu_kt)
+    kv = torch.matmul(elu_kt, V)
+    # print("elu_kt @ V")
+    # print(kv)
+    elu_q = elu(Q)
+    # print("elu_q")
+    # print(elu_q)
+    qkv = torch.matmul(elu_q, kv)
+    elu_k = elu(K)
+    kp_sum = elu_k.sum(dim=0).reshape(-1, 1)
+    # print("kp_sum")
+    # print(kp_sum)
+    torch_out = qkv / (torch.matmul(elu_q, kp_sum))
+    # print("elu_q @ kp_sum")
+    # print(torch.matmul(elu_q, kp_sum))
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_linear_self_attention(Q, K, V):
+        out = leetgpu.linear_self_attention(Q, K, V)
+        return out
+    
+    out = leetgpu_linear_self_attention(Q, K, V)
+
+    # 打印结果
+    print("Q")
+    print(Q)
+    print("K")
+    print(K)
+    print("V")
+    print(V)
+    print("Linear Self-Attention Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+
+
+
 
 
 if __name__ == "__main__":
@@ -1673,4 +1877,7 @@ if __name__ == "__main__":
     # rope_embedding()
     # conv3D()
     # mha()
-    multi_agent_simulation()
+    # multi_agent_simulation()
+    # kmeans_clustering()
+    # causal_self_attention()
+    linear_self_attention()

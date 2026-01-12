@@ -60,6 +60,9 @@ setup(
                 "src/conv3D.cu",
                 "src/mha.cu",
                 "src/multi_agent_simulation.cu",
+                "src/kmeans_clustering.cu",
+                "src/causal_self_attention.cu",
+                "src/linear_self_attention.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

@@ -213,6 +213,21 @@ void multi_agent_sim_cuda(
     const float* agents, float* agents_next, int N
 ); 
 
+void kmeans_clustering_cuda(
+    const float* data_x, const float* data_y, int* labels,
+    float* initial_centroid_x, float* initial_centroid_y, float* final_centroid_x,
+    float* final_centroid_y, int sample_size, int k, int max_iterations
+);
+
+void causal_self_attention_cuda(
+    const float* Q, const float* K, const float* V, float* output, int M, int d
+);
+
+void linear_self_attention_cuda(
+    const float* Q, const float* K, const float* V, float* output, int M, int d
+);
+
+
 
 
 // -------------------------- Python 绑定函数 --------------------------
@@ -1363,6 +1378,49 @@ torch::Tensor conv3D(
 }
 
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> kmeans_clustering(
+    const torch::Tensor& data_x,
+    const torch::Tensor& data_y,
+    const torch::Tensor& init_centroids_x,
+    const torch::Tensor& init_centroids_y,
+    const int max_iterations
+) { 
+    TORCH_CHECK(data_x.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(data_y.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(init_centroids_x.ndimension() == 1, "init_centroids_x must be 1D");
+    TORCH_CHECK(init_centroids_y.ndimension() == 1, "init_centroids_y must be 1D");
+    TORCH_CHECK(data_x.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(data_y.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(init_centroids_y.device().is_cuda(), "init_centroids_y must be on CUDA");
+    TORCH_CHECK(init_centroids_x.device().is_cuda(), "init_centroids_x must be on CUDA");
+    TORCH_CHECK(data_x.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(data_y.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(init_centroids_x.dtype() == torch::kFloat32, "init_centroids_x must be of type float32");
+    TORCH_CHECK(init_centroids_y.dtype() == torch::kFloat32, "init_centroids_y must be of type float32");
+
+    int sample_size = data_x.size(0);
+    int k = init_centroids_x.size(0);
+    TORCH_CHECK(sample_size > k, "Sample size must be greater than number of clusters");
+    TORCH_CHECK(data_y.size(0) == sample_size, "Input must have the same number of rows as init_centroids_y");
+    TORCH_CHECK(init_centroids_y.size(0) == k, "init_centroids_y must have the same number of rows as init_centroids_x");
+
+    torch::Tensor labels = torch::empty({sample_size}, data_x.options().dtype(torch::kInt32));
+    torch::Tensor final_centroids_x = torch::empty({k}, data_x.options());
+    torch::Tensor final_centroids_y = torch::empty({k}, data_x.options());
+    kmeans_clustering_cuda(
+        data_x.data_ptr<float>(), 
+        data_y.data_ptr<float>(), 
+        labels.data_ptr<int>(), 
+        init_centroids_x.data_ptr<float>(),
+        init_centroids_y.data_ptr<float>(),
+        final_centroids_x.data_ptr<float>(),
+        final_centroids_y.data_ptr<float>(),
+        sample_size, k, max_iterations
+    );
+    return {labels, final_centroids_x, final_centroids_y};
+}
+
+
 torch::Tensor mha(
     const torch::Tensor& Q,
     const torch::Tensor& K,
@@ -1423,6 +1481,72 @@ torch::Tensor multi_agent_sim(
 }
 
 
+torch::Tensor causal_self_attention(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V
+) {
+    TORCH_CHECK(Q.ndimension() == 2, "Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.size(0) == K.size(0), "Q and K must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Q and K must have the same number of columns");
+    TORCH_CHECK(Q.size(0) == V.size(0), "Q and V must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == V.size(1), "Q and V must have the same number of columns");
+
+    int M = Q.size(0);
+    int d_model = Q.size(1);
+    torch::Tensor output = torch::zeros({M, d_model}, Q.options());
+
+    causal_self_attention_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, d_model
+    );
+    return output;
+}
+
+
+torch::Tensor linear_self_attention(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V
+) {
+    TORCH_CHECK(Q.ndimension() == 2, "Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.size(0) == K.size(0), "Q and K must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Q and K must have the same number of columns");
+    TORCH_CHECK(Q.size(0) == V.size(0), "Q and V must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == V.size(1), "Q and V must have the same number of columns");
+
+    int M = Q.size(0);
+    int d_model = Q.size(1);
+    torch::Tensor output = torch::zeros({M, d_model}, Q.options());
+
+    linear_self_attention_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, d_model
+    );
+    return output;
+}
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -1477,4 +1601,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv3D", &conv3D, "Convolution 3D (CUDA)");
     m.def("mha", &mha, "Multi-Head Attention (CUDA)");
     m.def("multi_agent_sim", &multi_agent_sim, "Multi-Agent Simulation (CUDA)");
+    m.def("kmeans_clustering", &kmeans_clustering, "K-Means Clustering (CUDA)");
+    m.def("causal_self_attention", &causal_self_attention, "Causal Self Attention (CUDA)");
+    m.def("linear_self_attention", &linear_self_attention, "Linear Self Attention (CUDA)");
 }
