@@ -71,14 +71,73 @@ __global__ void sw_attn_kernel(
 }
 
 
+__global__ void sw_attn_kernel_without_warp_reduce(
+    const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
+) { 
+    int row_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row_id < M) {
+        float max_val = -FLT_MAX;
+        int k_start_row = (row_id - window_size) >= 0 ? (row_id - window_size) : 0;
+        int k_end_row = (row_id + window_size) < M ? (row_id + window_size) : (M - 1);
+        int real_window_size = k_end_row - k_start_row + 1;
+
+        float scores[65];  // assuming window_size <= 32
+        // compute max for numerical stability
+        for (int k_row = k_start_row; k_row <= k_end_row; k_row++) {
+            float qk = 0.0f;
+            for (int i = 0; i < d; i++) {
+                qk += Q[row_id * d + i] * K[k_row * d + i];
+            }
+            qk = qk / sqrtf((float)d);
+            scores[k_row - k_start_row] = qk;
+            max_val = max(max_val, qk);
+        }
+
+        // compute sum of exp
+        float sum_exp = 0.0f;
+        for (int i = 0; i < real_window_size; i++) {
+            scores[i] = expf(scores[i] - max_val);  // store exp values for later use
+            sum_exp += scores[i];
+        }
+
+        // compute attention output
+        for (int i = 0; i < real_window_size; i++) {
+            scores[i] /= (sum_exp + 1e-16f);
+        }
+
+        for (int i = 0; i < d; i++) {
+            float attn_val = 0.0f;
+            for (int j = 0; j < real_window_size; j++) {
+                int k_row = k_start_row + j;
+                attn_val += scores[j] * V[k_row * d + i];
+            }
+            output[row_id * d + i] = attn_val;
+        }
+    }
+}
+
+
 // Q, K, V, output are device pointers
 void sliding_window_self_attention_cuda(
     const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
 ) {
+    // with warp reduce
     // each warp handles one query
     dim3 block(128);
     dim3 grid(div_up(M, 4));
     sw_attn_kernel<<<grid, block>>>(Q, K, V, output, M, d, window_size);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 
+    // without warp reduce
+    // each thread handles one query
+    // dim3 block(128);
+    // dim3 grid(div_up(M, 128));
+    // sw_attn_kernel_without_warp_reduce<<<grid, block>>>(Q, K, V, output, M, d, window_size);
+    // CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
+
+
+
+
+
+
