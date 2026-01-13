@@ -231,6 +231,11 @@ void sliding_window_self_attention_cuda(
     const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
 );
 
+void weight_dequantization_cuda(
+    const float* X, const float* S, float* Y, int M, int N, int TILE_SIZE
+);
+
+
 
 // -------------------------- Python 绑定函数 --------------------------
 torch::Tensor vector_add(
@@ -1587,9 +1592,32 @@ torch::Tensor sliding_window_self_attention(
 }
 
 
+torch::Tensor weight_dequantization(
+    const torch::Tensor& X,
+    const torch::Tensor& S, 
+    const int tile_size
+) {
+    TORCH_CHECK(X.ndimension() == 2, "X must be 2D");
+    TORCH_CHECK(S.ndimension() == 2, "S must be 2D");
+    TORCH_CHECK(X.device().is_cuda(), "X must be on CUDA");
+    TORCH_CHECK(S.device().is_cuda(), "S must be on CUDA");
+    TORCH_CHECK(X.dtype() == torch::kFloat32, "X must be of type float32");
+    TORCH_CHECK(S.dtype() == torch::kFloat32, "S must be of type float32");
+    int M = X.size(0);
+    int N = X.size(1);
+    TORCH_CHECK(((M + tile_size - 1) / tile_size) == S.size(0), "Invalid shape for S");
+    TORCH_CHECK(((N + tile_size - 1) / tile_size) == S.size(1), "Invalid shape for S");
 
+    torch::Tensor output = torch::empty({M, N}, X.options());
 
-
+    weight_dequantization_cuda(
+        X.data_ptr<float>(),
+        S.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, N, tile_size
+    );
+    return output;
+}
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
@@ -1647,4 +1675,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("causal_self_attention", &causal_self_attention, "Causal Self Attention (CUDA)");
     m.def("linear_self_attention", &linear_self_attention, "Linear Self Attention (CUDA)");
     m.def("sliding_window_self_attention", &sliding_window_self_attention, "Sliding Window Self Attention (CUDA)");
+    m.def("weight_dequantization", &weight_dequantization, "Weight Dequantization (CUDA)");
 }

@@ -1870,7 +1870,43 @@ def sliding_window_self_attention():
     compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
+def weight_dequantization():
+    # 测试
+    M = 300
+    N = 200
+    tile_size = 32
+    X = torch.rand(M, N, device="cuda", dtype=torch.float32)
+    S = torch.rand(((M + tile_size - 1) // tile_size), ((N + tile_size - 1) // tile_size), device="cuda", dtype=torch.float32)
 
+    # 用 PyTorch 实现
+    # Implement a GPU program that "dequantizes" a weight matrix on the GPU. You are given an input matrix X of shape [M, N] containing quantized values and a scale matrix S of shape [ceil(M/T), ceil(N/T)], where T is the tile size.
+    # Y_{ij} = X_{ij} * S_{floor(i/T), floor(j/T)}
+    torch_out = torch.zeros_like(X)
+    for i in range(M):
+        for j in range(N):
+            torch_out[i, j] = X[i, j] * S[i // tile_size, j // tile_size]
+
+
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_weight_dequantization(X, S, tile_size):
+        out = leetgpu.weight_dequantization(X, S, tile_size)
+        return out
+    
+    out = leetgpu_weight_dequantization(X, S, tile_size)
+
+    # 打印结果
+    print("X")
+    print(X)
+    print("S")
+    print(S)
+    print("Weight Dequantization Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
 if __name__ == "__main__":
@@ -1928,4 +1964,5 @@ if __name__ == "__main__":
     # kmeans_clustering()
     # causal_self_attention()
     # linear_self_attention()
-    sliding_window_self_attention()
+    # sliding_window_self_attention()
+    weight_dequantization()

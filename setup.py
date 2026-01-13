@@ -64,6 +64,7 @@ setup(
                 "src/causal_self_attention.cu",
                 "src/linear_self_attention.cu",
                 "src/sliding_window_self_attention.cu",
+                "src/weight_dequantization.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [
