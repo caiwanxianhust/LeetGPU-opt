@@ -30,6 +30,7 @@ __global__ void sw_attn_kernel(
         int k_start_row = (row_id - window_size) >= 0 ? (row_id - window_size) : 0;
         int k_end_row = (row_id + window_size) < M ? (row_id + window_size) : (M - 1);
         int real_window_size = k_end_row - k_start_row + 1;
+        float scale = rsqrtf((float)d);
         for (int k_row = k_start_row; k_row <= k_end_row; k_row++) {
             float qk = 0.0f;
             for (int i = lane_id; i < d; i += 32) {
@@ -39,7 +40,7 @@ __global__ void sw_attn_kernel(
             // warp-level reduction
             qk = warp_all_reduce_sum(qk);
             if (lane_id == 0) {
-                qk = qk / sqrtf((float)d);
+                qk = qk * scale;
                 s_qk[warp_id][k_row - k_start_row] = qk;
                 max_val = max(max_val, qk);
             }
@@ -52,9 +53,11 @@ __global__ void sw_attn_kernel(
                 sum_exp += expf(s_qk[warp_id][i] - max_val);
             }
 
+            sum_exp = 1.0f / sum_exp;
+
             for (int i = 0; i < real_window_size; i++) {
                 // normalize
-                s_qk[warp_id][i] = expf(s_qk[warp_id][i] - max_val) / (sum_exp + 1e-8f);
+                s_qk[warp_id][i] = expf(s_qk[warp_id][i] - max_val) * sum_exp;
             }
         }
         __syncwarp();
@@ -82,13 +85,14 @@ __global__ void sw_attn_kernel_without_warp_reduce(
         int real_window_size = k_end_row - k_start_row + 1;
 
         float scores[65];  // assuming window_size <= 32
+        float scale = rsqrtf((float)d);
         // compute max for numerical stability
         for (int k_row = k_start_row; k_row <= k_end_row; k_row++) {
             float qk = 0.0f;
             for (int i = 0; i < d; i++) {
                 qk += Q[row_id * d + i] * K[k_row * d + i];
             }
-            qk = qk / sqrtf((float)d);
+            qk = qk * scale;
             scores[k_row - k_start_row] = qk;
             max_val = max(max_val, qk);
         }
@@ -100,9 +104,10 @@ __global__ void sw_attn_kernel_without_warp_reduce(
             sum_exp += scores[i];
         }
 
+        sum_exp = 1.0f / sum_exp;
         // compute attention output
         for (int i = 0; i < real_window_size; i++) {
-            scores[i] /= (sum_exp + 1e-16f);
+            scores[i] *= sum_exp;
         }
 
         for (int i = 0; i < d; i++) {
@@ -135,9 +140,4 @@ void sliding_window_self_attention_cuda(
     // sw_attn_kernel_without_warp_reduce<<<grid, block>>>(Q, K, V, output, M, d, window_size);
     // CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
-
-
-
-
-
 

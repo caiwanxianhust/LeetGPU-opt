@@ -34,13 +34,42 @@ __global__ void invert_kernel(unsigned char* image, int width, int height) {
         image[idx * 4 + 1] = 255 - image[idx * 4 + 1];
         image[idx * 4 + 2] = 255 - image[idx * 4 + 2];
     }
-
 }
+
+__global__ void invert_vec_kernel(unsigned char* image, int width, int height) { 
+    int* image_vec = reinterpret_cast<int*>(image);
+    const int idx = (blockIdx.x * blockDim.x + threadIdx.x);
+    for (int i = idx; i < width * height; i += blockDim.x * gridDim.x) {
+        image_vec[i] ^= 0xFFFFFF;
+    }
+}
+
 // image_input, image_output are device pointers (i.e. pointers to memory on the GPU)
-void color_invert_cuda(unsigned char* image, int width, int height) {
+void color_invert_naive(unsigned char* image, int width, int height) {
     int threadsPerBlock = 256;
     int blocksPerGrid = (width * height + threadsPerBlock - 1) / threadsPerBlock;
 
     invert_kernel<<<blocksPerGrid, threadsPerBlock>>>(image, width, height);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+void color_invert_vec(unsigned char* image, int width, int height) {
+    int block_size = 256;
+    int grid_size;
+    int N = width * height;
+    if (N < block_size * 1024) {
+        grid_size = (N + block_size - 1) / block_size;
+    } else {
+        grid_size = 1024;
+    }
+
+    invert_vec_kernel<<<grid_size, block_size>>>(image, width, height);
+    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+void color_invert_cuda(unsigned char* image, int width, int height) {
+    color_invert_vec(image, width, height);
+    // color_invert_naive(image, width, height);
 }

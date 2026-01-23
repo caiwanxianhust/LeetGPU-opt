@@ -22,7 +22,7 @@ Output matrix dimensions: cols × rows
 __global__ void matrix_transpose_kernel(const float* input, float* output, int rows, int cols) {
     const int bx = blockIdx.x * blockDim.x;
     const int by = blockIdx.y * blockDim.y;
-    __shared__ float s_buf[16][17];
+    __shared__ float s_buf[32][33];
     int x = bx + threadIdx.x;
     int y = by + threadIdx.y;
     if (x < cols && y < rows) {
@@ -40,7 +40,7 @@ __global__ void matrix_transpose_kernel(const float* input, float* output, int r
 
 // input, output are device pointers (i.e. pointers to memory on the GPU)
 void matrix_transpose_cuda(const float* input, float* output, int rows, int cols) {
-    dim3 threadsPerBlock(16, 16);
+    dim3 threadsPerBlock(32, 32);
     dim3 blocksPerGrid((cols + threadsPerBlock.x - 1) / threadsPerBlock.x,
                        (rows + threadsPerBlock.y - 1) / threadsPerBlock.y);
 

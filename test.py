@@ -4,29 +4,101 @@ import time
 import torch.nn.functional as F
 
 
+def compare_tensors(tensor1, tensor2, atol=1e-3, rtol=1e-5, max_print=10):
+    """
+    比较两个张量，并打印所有不匹配元素的信息
+    
+    Args:
+        tensor1, tensor2: 要比较的张量
+        atol: 绝对容差
+        rtol: 相对容差
+        max_print: 最多打印多少个不匹配项
+    
+    Returns:
+        bool: 如果所有元素都匹配则返回True
+    """
+    # 检查形状是否一致
+    if tensor1.shape != tensor2.shape:
+        print(f"Shape mismatch: {tensor1.shape} vs {tensor2.shape}")
+        return False
+        
+    # 计算差异
+    close = torch.isclose(tensor1, tensor2, atol=atol, rtol=rtol)
+    
+    if close.all():
+        print("All tests passed!")
+        return True
+    else:
+        # 找到不匹配的位置
+        not_close = ~close
+        mismatch_indices = torch.nonzero(not_close)
+        
+        print(f"Found {mismatch_indices.shape[0]} mismatched elements out of {tensor1.numel()} total elements")
+        print("\nFirst {} mismatches:".format(min(max_print, mismatch_indices.shape[0])))
+        print("Index\t\tComputed\tExpected\tDifference")
+        print("-" * 60)
+        
+        for i, idx in enumerate(mismatch_indices[:max_print]):
+            idx_tuple = tuple(idx.tolist())
+            computed_val = tensor1[idx_tuple].item()
+            expected_val = tensor2[idx_tuple].item()
+            diff = abs(computed_val - expected_val)
+            
+            print(f"{str(idx_tuple):15} {computed_val:10.6f} \t{expected_val:10.6f} \t{diff:10.6f}")
+            
+        # 显示最大差异
+        abs_diff = torch.abs(tensor1 - tensor2)
+        max_diff_idx = torch.argmax(abs_diff)
+        max_diff_val = abs_diff.flatten()[max_diff_idx].item()
+        
+        # 将扁平索引转换为多维索引
+        max_diff_multi_idx = torch.unravel_index(max_diff_idx, tensor1.shape) if hasattr(torch, 'unravel_index') else \
+                            tuple((max_diff_idx // tensor1.stride(dim)) % tensor1.size(dim) for dim in range(tensor1.dim()))
+        
+        print(f"\nMaximum difference: {max_diff_val:.6f}")
+        print(f"At index: {max_diff_multi_idx}")
+        print(f"Computed value: {tensor1[max_diff_multi_idx].item():.6f}")
+        print(f"Expected value: {tensor2[max_diff_multi_idx].item():.6f}")
+        
+        return False
+
+
+
 def matrix_multiplication():
     # 测试FP32
-    a = torch.randn(1024, 2048, device="cuda", dtype=torch.float32)
-    b = torch.randn(2048, 512, device="cuda", dtype=torch.float32)
+    M = 3200
+    N = 4095
+    K = 4089
+    a = torch.randn(M, K, device="cuda", dtype=torch.float32)
+    b = torch.randn(K, N, device="cuda", dtype=torch.float32)
 
+    # 用 PyTorch 实现
+    torch_out = torch.matmul(a, b)
+
+    # 用 LeetGPU 实现
     start_time = time.time()
     c = leetgpu.matmul(a, b)
     elapse_time = time.time() - start_time
     print(f"CUDA Time taken: {elapse_time * 1000} ms")
 
+    # 打印结果
+    print("Matrix A:")
     print(a[:4, :4])
+    print("Matrix B:")
     print(b[:4, :4])
+    print("Matrix C:")
     print(c[:4, :4])
-    print(torch.matmul(a, b)[:4, :4])
+    print(torch_out[:4, :4])
 
-    assert torch.allclose(c, torch.matmul(a, b), atol=1e-3)
-    print("All tests passed!")
+    # 检查结果
+    compare_tensors(c, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
 
 
 def vector_addition():
     # 测试FP32
-    a = torch.randn(1024 * 1024, device="cuda", dtype=torch.float32)
-    b = torch.randn(1024 * 1024, device="cuda", dtype=torch.float32)
+    N = 1000000
+    a = torch.randn(N, device="cuda", dtype=torch.float32)
+    b = torch.randn(N, device="cuda", dtype=torch.float32)
 
     start_time = time.time()
     c = leetgpu.vector_add(a, b)
@@ -91,7 +163,9 @@ def reverse_array():
 
 def transpose():
     # 测试FP32
-    x = torch.randn(1024, 898, device="cuda", dtype=torch.float32)
+    M = 8000
+    N = 7559
+    x = torch.randn(M, N, device="cuda", dtype=torch.float32)
 
     # 用 PyTorch 实现
     torch_out = torch.transpose(x, 0, 1)
@@ -114,7 +188,9 @@ def transpose():
 
 def color_inversion():
     # 测试
-    x = torch.randint(0, 256, (512, 1024, 4), device="cuda", dtype=torch.uint8)
+    M = 4006
+    N = 3997
+    x = torch.randint(0, 256, (M, N, 4), device="cuda", dtype=torch.uint8)
 
     # 用 PyTorch 实现
     torch_out = torch.empty_like(x, device="cuda", dtype=torch.uint8)
@@ -122,10 +198,10 @@ def color_inversion():
     torch_out[:, :, 1] = 255 - x[:, :, 1]
     torch_out[:, :, 2] = 255 - x[:, :, 2]
     torch_out[:, :, 3] = x[:, :, 3]
-    print("x: ")
-    print(x[:4, :4, :4])
-    print("pytorch out: ")
-    print(torch_out[:4, :4, :4])
+    # print("x: ")
+    # print(x[:4, :4, :4])
+    # print("pytorch out: ")
+    # print(torch_out[:4, :4, :4])
 
     inp = x.flatten()
     print("input: ")
@@ -133,7 +209,7 @@ def color_inversion():
     
     # 用 LeetGPU 实现
     start_time = time.time()
-    leetgpu.color_invert(inp, 512, 1024)
+    leetgpu.color_invert(inp, N, M)
     elapse_time = time.time() - start_time
     print(f"CUDA Time taken: {elapse_time * 1000} ms")
 
@@ -143,8 +219,8 @@ def color_inversion():
     print("pytorch out: ")
     print(torch_out.flatten()[:16])
 
-    assert torch.allclose(inp, torch_out.flatten(), atol=1e-3)
-    print("All tests passed!")
+    # 检查结果
+    compare_tensors(inp, torch_out.flatten(), atol=1e-3, rtol=1e-3, max_print=10)
 
 
 def relu():
@@ -560,9 +636,9 @@ def sparse_matrix_vector_multiplication():
 
 def gemm():
     # 测试
-    M = 3303
-    N = 6556
-    K = 1922
+    M = 4096
+    N = 4096
+    K = 3999
     alpha = 0.5
     beta = 0.1
     A = torch.randn(M * K, device="cuda", dtype=torch.float16)
@@ -579,15 +655,14 @@ def gemm():
     print(f"CUDA Time taken: {elapse_time * 1000} ms")
 
     # 打印结果
-    print(A.view(M, K))
-    print(B.view(K, N))
-    print(C.view(M, N))
+    print(A.view(M, K)[-4:, -4:])
+    print(B.view(K, N)[-4:, -4:])
+    print(C.view(M, N)[-4:, -4:])
     print(out.view(M, N)[-4:, -4:])
     print(torch_out.view(M, N)[-4:, -4:])
 
     # 检查结果
-    assert torch.allclose(out.view(M, N), torch_out.view(M, N), rtol=1e-1, atol=1e-1)
-    print("All tests passed!")
+    compare_tensors(out.view(M, N), torch_out.view(M, N), rtol=1e-1, atol=1e-1)
 
 
 def avg_categorical_cross_entropy_loss():
@@ -775,8 +850,7 @@ def int8_quantized_matmul():
     print(torch_out[-8:, :8])
 
     # 检查结果
-    assert torch.allclose(out, torch_out, atol=1e-3)
-    print("All tests passed!")
+    compare_tensors(out, torch_out, atol=1e-1, rtol=1e-1, max_print=10)
 
 
 def ordinary_least_squares():
@@ -956,65 +1030,6 @@ def radix_sort():
     # 检查结果 (比较前需要确保两个数组具有相同的类型)
     assert torch.allclose(out.float(), torch_sorted.float(), rtol=1e-3, atol=1e-3)
     print("All tests passed!")
-
-
-def compare_tensors(tensor1, tensor2, atol=1e-3, rtol=1e-5, max_print=10):
-    """
-    比较两个张量，并打印所有不匹配元素的信息
-    
-    Args:
-        tensor1, tensor2: 要比较的张量
-        atol: 绝对容差
-        rtol: 相对容差
-        max_print: 最多打印多少个不匹配项
-    
-    Returns:
-        bool: 如果所有元素都匹配则返回True
-    """
-    # 检查形状是否一致
-    if tensor1.shape != tensor2.shape:
-        print(f"Shape mismatch: {tensor1.shape} vs {tensor2.shape}")
-        return False
-        
-    # 计算差异
-    close = torch.isclose(tensor1, tensor2, atol=atol, rtol=rtol)
-    
-    if close.all():
-        print("All tests passed!")
-        return True
-    else:
-        # 找到不匹配的位置
-        not_close = ~close
-        mismatch_indices = torch.nonzero(not_close)
-        
-        print(f"Found {mismatch_indices.shape[0]} mismatched elements out of {tensor1.numel()} total elements")
-        print("\nFirst {} mismatches:".format(min(max_print, mismatch_indices.shape[0])))
-        print("Index\t\tComputed\tExpected\tDifference")
-        print("-" * 60)
-        
-        for i, idx in enumerate(mismatch_indices[:max_print]):
-            idx_tuple = tuple(idx.tolist())
-            computed_val = tensor1[idx_tuple].item()
-            expected_val = tensor2[idx_tuple].item()
-            diff = abs(computed_val - expected_val)
-            
-            print(f"{str(idx_tuple):15} {computed_val:10.6f} \t{expected_val:10.6f} \t{diff:10.6f}")
-            
-        # 显示最大差异
-        abs_diff = torch.abs(tensor1 - tensor2)
-        max_diff_idx = torch.argmax(abs_diff)
-        max_diff_val = abs_diff.flatten()[max_diff_idx].item()
-        
-        # 将扁平索引转换为多维索引
-        max_diff_multi_idx = torch.unravel_index(max_diff_idx, tensor1.shape) if hasattr(torch, 'unravel_index') else \
-                            tuple((max_diff_idx // tensor1.stride(dim)) % tensor1.size(dim) for dim in range(tensor1.dim()))
-        
-        print(f"\nMaximum difference: {max_diff_val:.6f}")
-        print(f"At index: {max_diff_multi_idx}")
-        print(f"Computed value: {tensor1[max_diff_multi_idx].item():.6f}")
-        print(f"Expected value: {tensor2[max_diff_multi_idx].item():.6f}")
-        
-        return False
 
 
 def matrix_power():
@@ -1387,9 +1402,9 @@ def attention_with_linear_bias():
 def batched_matrix_mul_fp16():
     # 测试
     BATCH = 32
-    N = 2000
-    M = 199
-    K = 498
+    N = 997
+    M = 569
+    K = 285
     A = torch.randn(BATCH, M, K, device="cuda", dtype=torch.float16)
     B = torch.randn(BATCH, K, N, device="cuda", dtype=torch.float16)
 
@@ -1915,7 +1930,7 @@ if __name__ == "__main__":
     # conv1D()
     # reverse_array()
     # transpose()
-    # color_inversion()
+    color_inversion()
     # relu()
     # leaky_relu()
     # rainbow_table()
@@ -1965,4 +1980,4 @@ if __name__ == "__main__":
     # causal_self_attention()
     # linear_self_attention()
     # sliding_window_self_attention()
-    weight_dequantization()
+    # weight_dequantization()

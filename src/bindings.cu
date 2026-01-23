@@ -273,9 +273,9 @@ torch::Tensor matrix_multiplication(
     TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
     TORCH_CHECK(B.dtype() == torch::kFloat32, "Input B must be of type float32");
     TORCH_CHECK(A.size(1) == B.size(0), "Input tensors must have compatible shapes");
-    int M = A.size(0), N = A.size(1), K = B.size(1);
+    int M = A.size(0), N = B.size(1), K = A.size(1);
     auto options = A.options();
-    torch::Tensor C = torch::empty({M, K}, options);
+    torch::Tensor C = torch::empty({M, N}, options);
     matrix_multiplication_cuda(
         A.data_ptr<float>(),
         B.data_ptr<float>(),
@@ -1618,6 +1618,11 @@ torch::Tensor weight_dequantization(
     );
     return output;
 }
+
+
+
+
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");

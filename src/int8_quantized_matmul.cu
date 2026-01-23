@@ -2,6 +2,7 @@
 
 #include <cuda.h>
 #include <cstdint>
+#include <mma.h>
 
 
 
@@ -54,35 +55,36 @@ static __device__ __host__ __forceinline__ int div_up(int a, int b) {
     return (a + b - 1) / b;
 }
 
-template<int T>
+template<int BM, int BN, int BK>
 __global__ void int8_quantized_matmul_kernel(const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C) {
-    //int T = 32;
-    int tid = threadIdx.x;
-    int tc = tid % T;
-    int tr = tid / T;
-    int col = blockIdx.x * T + tc;
-    int row = blockIdx.y * T + tr;
+    int tc = threadIdx.x % BN;
+    int tr = threadIdx.x / BN;
+    int col = blockIdx.x * BN + tc;
+    int row = blockIdx.y * BM + tr;
 
     // load tile to smem:
-    __shared__ int A_s[T][T];
-    __shared__ int B_s[T][T];
+    __shared__ int s_a[BM][BK];
+    __shared__ int s_b[BK][BN];
 
-    int numTiles = (K + T - 1) / T;
-
+    int numTiles = (K + BK - 1) / BK;
     int acc = 0;
     for (int t = 0; t < numTiles; t++) {
-        int Acol = tc + t*T;
-        int Brow = tr + t*T;
-        A_s[tr][tc] = (Acol < K && row < M) ? static_cast<int>(A[row * K + Acol]) - zero_point_A : 0;
-        B_s[tr][tc] = (col < N && Brow < K) ? static_cast<int>(B[Brow * N + col]) - zero_point_B : 0;
+        for (int i = threadIdx.x; i < BM * BK; i += blockDim.x) {
+            int row_a = i / BK + blockIdx.y * BM;
+            int col_a = i % BK + t * BK;
+            s_a[i / BK][i % BK] = (col_a < K && row_a < M) ? static_cast<int>(A[row_a * K + col_a]) - zero_point_A : 0;
+        }
+        for (int i = threadIdx.x; i < BK * BN; i += blockDim.x) {
+            int row_b = i / BN + t * BK;
+            int col_b = i % BN + blockIdx.x * BN;
+            s_b[i / BN][i % BN] = (col_b < N && row_b < K) ? static_cast<int>(B[row_b * N + col_b]) - zero_point_B : 0;
+        }
         __syncthreads();
 
         // Find dot product 
         if (col < N && row < M) {
-            
-            for (int i = 0; i < T; i++) {
-                acc += A_s[tr][i] * B_s[i][tc];
-                //acc += (static_cast<int>(A[row * K + i]) - zero_point_A) * (static_cast<int>(B[i * N + col]) - zero_point_B);
+            for (int i = 0; i < BK; i++) {
+                acc += s_a[tr][i] * s_b[i][tc];
             }
         }
         __syncthreads();
@@ -96,15 +98,129 @@ __global__ void int8_quantized_matmul_kernel(const int8_t* A, const int8_t* B, i
     }
 }
 
+
+static __device__ __host__ __forceinline__ int8_t clamp_int8(int x) {
+    return static_cast<int8_t>(min(max(x, -128), 127));
+}
+
+
+template <int BM, int BN, int BK, int WM, int WN>
+__global__ void int8_quantized_matmul_warp_wmma_kernel(
+    const int8_t* A, const int8_t* B, int8_t* C, 
+    int M, int N, int K, float scale_A, float scale_B, float scale_C, 
+    int zero_point_A, int zero_point_B, int zero_point_C) 
+{ 
+    using namespace nvcuda;
+    // block 内 warp 的 id
+    const int warp_id = threadIdx.x / 32;
+    const int lane_id = threadIdx.x % 32;
+
+    // 为了避免 bank conflict，增加 padding
+    const int lda = BK; 
+    const int ldb = BN;
+    const int ldc = BN;
+    __shared__ int8_t s_a[BM * lda];
+    __shared__ int8_t s_b[BK * ldb];
+    __shared__ int s_c[BM * ldc];
+
+    const int warp_col_id = warp_id % (BN / WN);
+    const int warp_row_id = warp_id / (BN / WN);
+
+    // lda = BK, ldb = BN, ldc = BN
+    int8_t* a_ptr = s_a + warp_row_id * WM * lda;
+    int8_t* b_ptr = s_b + warp_col_id * WN;
+
+    using FragAType = wmma::fragment<wmma::matrix_a, 16, 16, 16, signed char, wmma::row_major>;
+    using FragBType = wmma::fragment<wmma::matrix_b, 16, 16, 16, signed char, wmma::row_major>;
+    using FragCType = wmma::fragment<wmma::accumulator, 16, 16, 16, int>;
+
+    FragAType frag_a;
+    FragBType frag_b;
+    FragCType frag_acc;
+
+    wmma::fill_fragment(frag_acc, 0);
+    __syncthreads();
+
+    for (int k = 0; k < K; k += BK) {
+        // load A from global to shared
+        for (int i = threadIdx.x; i < BM * BK; i += blockDim.x) {
+            int row = i / BK;
+            int col = i % BK;
+            int row_a = i / BK + blockIdx.y * BM;
+            int col_a = i % BK + k;
+            s_a[row * lda + col] = (row_a < M && col_a < K) ? clamp_int8(static_cast<int>(A[row_a * K + col_a]) - zero_point_A) : 0;
+        }
+        // load B from global to shared
+        for (int i = threadIdx.x; i < BK * BN; i += blockDim.x) {
+            int row = i / BN;
+            int col = i % BN;
+            int row_b = i / BN + k;
+            int col_b = i % BN + blockIdx.x * BN;
+            s_b[row * ldb + col] = (row_b < K && col_b < N) ? clamp_int8(static_cast<int>(B[row_b * N + col_b]) - zero_point_B) : 0;
+        }
+        __syncthreads();
+
+        // compute block mma 
+        wmma::load_matrix_sync(frag_a, a_ptr, lda);
+        wmma::load_matrix_sync(frag_b, b_ptr, ldb);
+        wmma::mma_sync(frag_acc, frag_a, frag_b, frag_acc);
+        __syncthreads();
+    }
+
+    int* c_ptr = s_c + warp_row_id * WM * ldc + warp_col_id * WN;
+    wmma::store_matrix_sync(c_ptr, frag_acc, ldc, wmma::mem_row_major);
+    __syncthreads();
+
+    for (int i = threadIdx.x; i < BM * BN; i += blockDim.x) {
+        int row = i / BN;
+        int col = i % BN;
+        int row_c = i / BN + blockIdx.y * BM;
+        int col_c = i % BN + blockIdx.x * BN;
+        if (row_c < M && col_c < N) {
+            int acc = s_c[row * ldc + col];
+            float scaled = (__int2float_rn(acc) * scale_A * scale_B / scale_C);
+            C[row_c * N + col_c] = clamp_int8(__float2int_rn(scaled) + zero_point_C);
+        }
+    }
+}
+
 // A, B, C are device pointers
-void int8_quantized_matmul_cuda(
+void int8_quantized_matmul_naive_cuda(
     const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, 
     float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C) {
-    constexpr int T = 32;
+    constexpr int BM = 32;
+    constexpr int BN = 32;
+    constexpr int BK = 32;
 
-    dim3 block(T * T);
-    dim3 grid(div_up(N, T), div_up(M, T));
-    int8_quantized_matmul_kernel<T><<<grid, block>>>(
+    dim3 block(BM * BN);
+    dim3 grid(div_up(N, BN), div_up(M, BM));
+    int8_quantized_matmul_kernel<BM, BN, BK><<<grid, block>>>(
         A, B, C, M, N, K, scale_A, scale_B, scale_C, zero_point_A, zero_point_B, zero_point_C);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 } 
+
+
+// A, B, C are device pointers
+void int8_quantized_matmul_warp_wmma_cuda(const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, 
+    float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C) 
+{
+    constexpr int BM = 32;
+    constexpr int BN = 32;
+    constexpr int BK = 16;
+    constexpr int WM = 16;
+    constexpr int WN = 16;
+
+    dim3 block(BM * BN / (WM * WN) * 32);
+    dim3 grid(div_up(N, BN), div_up(M, BM));
+    int8_quantized_matmul_warp_wmma_kernel<BM, BN, BK, WM, WN><<<grid, block>>>(
+        A, B, C, M, N, K, scale_A, scale_B, scale_C, zero_point_A, zero_point_B, zero_point_C);
+    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+void int8_quantized_matmul_cuda(
+    const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, 
+    float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C) 
+{
+    int8_quantized_matmul_warp_wmma_cuda(A, B, C, M, N, K, scale_A, scale_B, scale_C, zero_point_A, zero_point_B, zero_point_C);
+}
