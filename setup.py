@@ -65,6 +65,10 @@ setup(
                 "src/linear_self_attention.cu",
                 "src/sliding_window_self_attention.cu",
                 "src/weight_dequantization.cu",
+                "src/jacobi_stencil_2D.cu",
+                "src/stream_compaction.cu",
+                "src/moe_topk_gating.cu",
+                "src/gpt2_transformer_block.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

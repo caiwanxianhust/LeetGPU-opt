@@ -66,9 +66,9 @@ def compare_tensors(tensor1, tensor2, atol=1e-3, rtol=1e-5, max_print=10):
 
 def matrix_multiplication():
     # 测试FP32
-    M = 3200
-    N = 4095
-    K = 4089
+    M = 3000
+    N = 2997
+    K = 4001
     a = torch.randn(M, K, device="cuda", dtype=torch.float32)
     b = torch.randn(K, N, device="cuda", dtype=torch.float32)
 
@@ -87,8 +87,8 @@ def matrix_multiplication():
     print("Matrix B:")
     print(b[:4, :4])
     print("Matrix C:")
-    print(c[:4, :4])
-    print(torch_out[:4, :4])
+    print(c)
+    print(torch_out)
 
     # 检查结果
     compare_tensors(c, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
@@ -1924,13 +1924,289 @@ def weight_dequantization():
     compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
+def jacobi_stencil_2D():
+    # 测试
+    M = 1000
+    N = 1000
+    X = torch.rand(M, N, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    # Implement a GPU program that applies a 2D Jacobi stencil to a matrix X of shape [M, N]. The stencil is defined as follows:
+    # Given a 2D grid of 32-bit floating point values, apply one iteration of the 5-point Jacobi stencil: each interior cell of the output is set to the average of its four cardinal neighbors (top, bottom, left, right) from the input grid. Boundary cells (first/last row and column) are copied unchanged from the input to the output.
+    torch_out = X.clone()
+     # 使用张量切片一次性处理所有内部点
+    # 上方邻居: X[0:-2, 1:-1]
+    # 下方邻居: X[2:, 1:-1]
+    # 左侧邻居: X[1:-1, 0:-2]
+    # 右侧邻居: X[1:-1, 2:]
+    # 计算内部区域的平均值
+    torch_out[1:-1, 1:-1] = (X[0:-2, 1:-1] + X[2:, 1:-1] + X[1:-1, 0:-2] + X[1:-1, 2:]) / 4.0
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_jacobi_stencil_2D(X):
+        out = leetgpu.jacobi_stencil_2D(X)
+        return out
+    
+    out = leetgpu_jacobi_stencil_2D(X)
+
+    # 打印结果
+    print("X")
+    print(X)
+    print("Jacobi Stencil 2D Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def stream_compaction():
+    """
+    Given a 1D array A of N 32-bit floating point numbers, compact all positive elements (A[i] > 0) to the front of the output array out, preserving their original relative order. Fill any remaining positions with 0.0. Stream compaction is a fundamental GPU primitive used throughout rendering, sparse computation, and collision detection.
+    Implementation Requirements
+    Use only native GPU features (external libraries are not permitted)
+    The solve function signature must remain unchanged
+    The first k positions of out must contain the k elements of A where A[i] > 0, in their original order
+    Positions k through N−1 of out must be 0.0
+    Elements where A[i] = 0.0 are not selected
+    Example
+    Input:  A = [1.0, -2.0, 3.0, 0.0, -1.0, 4.0]
+    Output: out = [1.0, 3.0, 4.0, 0.0, 0.0, 0.0]
+    Constraints
+    1 ≤ N ≤ 100,000,000
+    −1000.0 ≤ A[i] ≤ 1000.0
+    out is pre-allocated with N elements, initialised to 0.0
+    Performance is measured with N = 50,000,000
+    """
+    # 测试
+    M = 100000
+    A = torch.rand(M, device="cuda", dtype=torch.float32) * 10.0 - 5.0
+
+    # 用 PyTorch 实现
+    # 创建布尔掩码，标记正数元素
+    mask = A > 0
+    # 提取所有正数元素
+    positive_elements = A[mask]
+    # 创建输出张量，初始化为零
+    torch_out = torch.zeros_like(A)
+    # 将正数元素复制到输出张量的前部
+    torch_out[:positive_elements.size(0)] = positive_elements
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_stream_compaction(A):
+        out = leetgpu.stream_compaction(A)
+        return out
+    
+    out = leetgpu_stream_compaction(A)
+
+    # 打印结果
+    print("A")
+    print(A)
+    print("Stream Compaction Result")
+    print(out)
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def moe_topk_gating():
+    """
+MoE Top-K Gating
+Medium
+Implement a GPU program that performs Top-K Gating for Mixture of Experts (MoE) models. Given a logit matrix of shape [M, E] where M is the number of tokens and E is the number of experts, identify the k largest values in each row, extract their indices, and apply softmax to get mixing weights.
+
+Implementation Requirements
+External libraries are not permitted
+The solve function signature must remain unchanged
+The final result must be stored in the topk_weights and topk_indices arrays
+Example 1:
+Input:
+  logits = [[1.0, 2.0, 3.0, 4.0],
+            [4.0, 3.0, 2.0, 1.0]]
+  M = 2, E = 4, k = 2
+
+Output:
+  topk_weights = [[0.7311, 0.2689],
+                  [0.7311, 0.2689]]
+  topk_indices = [[3, 2],
+                  [0, 1]]
+
+Explanation:
+Row 0: Top-2 values are 3.0 and 4.0 at indices 2 and 3.
+       Softmax([3.0, 4.0]) = [0.2689, 0.7311]
+Row 1: Top-2 values are 4.0 and 3.0 at indices 0 and 1.
+       Softmax([4.0, 3.0]) = [0.7311, 0.2689]
+Constraints
+1 ≤ M ≤ 10,000 (number of tokens)
+1 ≤ E ≤ 256 (number of experts)
+1 ≤ k ≤ E (top-k selection, typically k=2)
+All tensors are stored on GPU
+Logits are 32-bit floats
+Indices are 32-bit integers
+Performance is measured with M = 1,024, k = 2
+    """
+    # 测试
+    M = 200
+    E = 200
+    k = int(4)
+    logits = torch.rand(M, E, device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    # 创建一个二维张量，用于存储Top-K的索引和权重
+    touch_topk_weights = torch.zeros(M, k, device="cuda", dtype=torch.float32)
+    touch_topk_indices = torch.zeros(M, k, device="cuda", dtype=torch.int32)
+    # 使用张量切片一次性处理所有行
+    for i in range(M):
+        # 获取当前行
+        row = logits[i]
+        # 取前k个最大值及其原始索引
+        topk_vals, topk_orig_indices = torch.topk(row, k)  # 获取top-k的值和原始索引
+        
+        touch_topk_indices[i] = topk_orig_indices
+        # 对这些值应用softmax
+        touch_topk_weights[i] = F.softmax(topk_vals, dim=0)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_moe_topk_gating(logits, k):
+        topk_weights, topk_indices = leetgpu.moe_topk_gating(logits, k)
+        return topk_weights, topk_indices
+    
+    topk_weights, topk_indices = leetgpu_moe_topk_gating(logits, k)
+
+    # 打印结果
+    print("Logits")
+    print(logits)
+    print("Top-K Weights")
+    print(topk_weights[:10])
+    print(touch_topk_weights[:10])
+    print("Top-K Indices")
+    print(topk_indices[:10])
+    print(touch_topk_indices[:10])
+
+    # 检查结果
+    compare_tensors(topk_weights, touch_topk_weights, atol=1e-3, rtol=1e-3, max_print=10)
+    compare_tensors(topk_indices, touch_topk_indices, max_print=10)
+
+def gpt2_transformer_block():
+    # 测试
+    seq_len = 128
+    dmodel = 768
+    num_heads = 12
+    head_dim = dmodel // num_heads
+    weights_size = dmodel * 2 + \
+            dmodel * 3 * dmodel + 3 * dmodel + \
+            dmodel * dmodel + dmodel + \
+            dmodel * 2 + \
+            dmodel * 3072 + 3072 + \
+            3072 * 768 + dmodel
+
+    
+    x = torch.randn(seq_len, dmodel, device="cuda", dtype=torch.float32) 
+    weights = torch.randn(weights_size, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_gpt2_transformer_block(x, weights):
+        out = leetgpu.gpt2_transformer_block(x, weights)
+        return out
+    
+    out = leetgpu_gpt2_transformer_block(x, weights)
+
+    # 用 PyTorch 实现
+    # layer_normalization x_norm = layer_norm(x)
+    off_gamma1 = 0;
+    off_beta1 = dmodel
+    off_w_qkv = 2 * dmodel
+    off_b_qkv = 2 * dmodel + dmodel * 3 * dmodel
+    off_w_attn = 2 * dmodel + dmodel * 3 * dmodel + 3 * dmodel
+    off_b_attn = 2 * dmodel + dmodel * 3 * dmodel + 3 * dmodel + dmodel * dmodel
+    off_gamma2 = off_b_attn + dmodel
+    off_beta2 = off_gamma2 + dmodel
+    off_w_fc = off_beta2 + dmodel
+    off_b_fc = off_w_fc + dmodel * 3072
+    off_w_proj = off_b_fc + 3072
+    off_b_proj = off_w_proj + 3072 * dmodel
+    print("gamma_1", off_gamma1, "beta_1", off_beta1, "w_qkv", off_w_qkv, "b_qkv", off_b_qkv, 
+          "w_attn", off_w_attn, "b_attn", off_b_attn, "gamma_2", off_gamma2, "beta_2", off_beta2, 
+          "w_fc", off_w_fc, "b_fc", off_b_fc, "w_proj", off_w_proj, "b_proj", off_b_proj)
+
+    gamma_1 = weights[off_gamma1:off_beta1].view(1, dmodel)
+    beta_1 = weights[off_beta1:off_w_qkv].view(1, dmodel)
+    w_qkv = weights[off_w_qkv:off_b_qkv].view(dmodel, 3 * dmodel)
+    bias_qkv = weights[off_b_qkv:off_w_attn].view(1, 3 * dmodel)
+    w_attn = weights[off_w_attn:off_b_attn].view(dmodel, dmodel)
+    bias_attn = weights[off_b_attn:off_gamma2].view(1, dmodel)
+    gamma_2 = weights[off_gamma2:off_beta2].view(1, dmodel)
+    beta_2 = weights[off_beta2:off_w_fc].view(1, dmodel)
+    w_fc = weights[off_w_fc:off_b_fc].view(dmodel, 3072)
+    bias_fc = weights[off_b_fc:off_w_proj].view(1, 3072)
+    w_proj = weights[off_w_proj:off_b_proj].view(3072, dmodel)
+    bias_proj = weights[off_b_proj:].view(1, dmodel)
+
+    def layer_norm(x, gamma, beta):
+        x_mean = x.mean(dim=-1, keepdim=True)
+        x_var = x.var(dim=-1, keepdim=True)
+        x_norm = (x - x_mean) / torch.sqrt(x_var + 1e-5) 
+        return gamma * x_norm + beta
+
+    x_norm = layer_norm(x, gamma_1, beta_1)
+    print(x_norm.shape, w_qkv.shape)
+    # matmul and bias
+    qkv = torch.matmul(x_norm, w_qkv) + bias_qkv
+    # maulti_head_attention
+    q, k, v = qkv.chunk(3, dim=-1)
+    q = q.view(seq_len, num_heads, head_dim)
+    k = k.view(seq_len, num_heads, head_dim)
+    v = v.view(seq_len, num_heads, head_dim)
+    # transpose,from (seq_len, num_heads, head_dim) to (num_heads, seq_len, head_dim)
+    q = q.transpose(0, 1)
+    k = k.transpose(0, 1)
+    v = v.transpose(0, 1)
+    print("Q, K, V shapes after reshape and transpose")
+    print(q.shape, k.shape, v.shape)
+    qk = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim)
+    attn_scores = qk.softmax(dim=-1)
+    attn_out = torch.matmul(attn_scores, v)
+    attn_out = attn_out.transpose(0, 1).contiguous().view(seq_len, dmodel)
+    attn_projected_res = torch.matmul(attn_out, w_attn) + bias_attn + x
+    # layer_normalization
+    x_norm2 = layer_norm(attn_projected_res, gamma_2, beta_2)
+    # feed_forward
+    fc_linear = torch.matmul(x_norm2, w_fc) + bias_fc
+    fc_gelu = F.gelu(fc_linear)
+    fc_out = torch.matmul(fc_gelu, w_proj) + bias_proj + attn_projected_res
+
+    
+
+    # 打印结果
+    print("Input X")
+    print(x[:4])
+    print("Output X")
+    print(out)
+    print(fc_out)
+    # print(qkv)  # Q
+
+    # 检查结果
+    compare_tensors(out, fc_out, atol=1e-2, rtol=1e-2, max_print=10)
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     # vector_addition()
     # matrix_multiplication()
     # conv1D()
     # reverse_array()
     # transpose()
-    color_inversion()
+    # color_inversion()
     # relu()
     # leaky_relu()
     # rainbow_table()
@@ -1981,3 +2257,7 @@ if __name__ == "__main__":
     # linear_self_attention()
     # sliding_window_self_attention()
     # weight_dequantization()
+    # jacobi_stencil_2D()
+    # stream_compaction()
+    # moe_topk_gating()
+    gpt2_transformer_block()

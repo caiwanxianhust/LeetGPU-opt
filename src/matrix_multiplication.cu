@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <assert.h>
+
 
 /*
 Write a program that multiplies two matrices of 32-bit floating point numbers on a GPU. Given matrix 
@@ -69,7 +71,7 @@ __device__ void mma_m16n16k16_fp32(float* C, const float* A, const float* B, int
 }
 
 
-template < int BM, int BN, int BK, int WM, int WN>
+template < int BM, int BN, int BK, int MMA_M, int MMA_N, int MMA_K>
 __global__ void matmul_warp_kernel(const float* A, const float* B, float* C, int M, int N, int K) { 
     const int warp_id = threadIdx.x / 32;
     const int lane_id = threadIdx.x % 32;
@@ -82,13 +84,20 @@ __global__ void matmul_warp_kernel(const float* A, const float* B, float* C, int
     __shared__ float s_b[BK * ldb];
     __shared__ float s_c[BM * ldc];
 
-    const int warp_col_id = warp_id % (BN / WN);
-    const int warp_row_id = warp_id / (BN / WN);
+    // warp 排布 2x2
+    constexpr int warp_col = 2;
+    constexpr int warp_row = 2;
+    // assert(warp_col * warp_row == blockDim.x / 32);
 
-     // lda = BK, ldb = BN, ldc = BN
-    float* a_ptr = s_a + warp_row_id * WM * lda;
-    float* b_ptr = s_b + warp_col_id * WN;
-    float* c_ptr = s_c + warp_row_id * WM * ldc + warp_col_id * WN;
+    // warp 在 BM 和 BN 轴上分别循环 2 次
+    constexpr int M_LOOP = BM / (warp_row * MMA_M);
+    constexpr int N_LOOP = BN / (warp_col * MMA_N);
+    // warp 在 BK 轴上循环 2 次
+    constexpr int K_LOOP = BK / (MMA_K);
+
+    // 当前 warp 的索引
+    const int warp_col_id = warp_id % (warp_col);
+    const int warp_row_id = warp_id / (warp_col);
 
     // initialize C in shared by zero
     for (int i = threadIdx.x; i < BM * BN; i += blockDim.x) {
@@ -117,8 +126,19 @@ __global__ void matmul_warp_kernel(const float* A, const float* B, float* C, int
         }
         __syncthreads();
 
-        // compute block mma 
-        mma_m16n16k16_fp32(c_ptr, a_ptr, b_ptr, lda, ldb, ldc);
+        // compute block mma 64 x 64
+        for (int m_id = 0; m_id < M_LOOP; m_id++) {
+            for (int n_id = 0; n_id < N_LOOP; n_id++) {
+                int a_off = m_id * (MMA_M * warp_row) * lda + warp_row_id * MMA_M * lda;
+                int b_off = n_id * (MMA_N * warp_col) + warp_col_id * MMA_N;
+                int c_off = m_id * (MMA_M * warp_row) * ldc + warp_row_id * MMA_M * ldc + n_id * (MMA_N * warp_col) + warp_col_id * MMA_N;
+                for (int k_id = 0; k_id < K_LOOP; k_id++) {
+                    a_off += k_id * MMA_K;
+                    b_off += k_id * MMA_K * ldb;
+                    mma_m16n16k16_fp32(s_c + c_off, s_a + a_off, s_b + b_off, lda, ldb, ldc);
+                }
+            }
+        }
         __syncthreads();
     }
 
@@ -145,15 +165,19 @@ void matmul_naive_fp32(const float* A, const float* B, float* C, int M, int N, i
 
 
 void matmul_warp_fp32(const float* A, const float* B, float* C, int M, int N, int K) { 
-    constexpr int WM = 16;
-    constexpr int WN = 16;
-    constexpr int BK = 16;
-    constexpr int BM = 32;
-    constexpr int BN = 32;
-    constexpr int block_size = BM * BN / (WM * WN) * 32; // 每个 block 含有多少线程数
+    // 每个 warp 计算一个 16x16 的子矩阵，总共 4 个 warp 计算一个 32x32 的子矩阵
+    // 每个 block 计算一个 64 x 64 的子矩阵，所以 4 个 warp 分别在 M 和 N 方向上循环 2 次
+    // BK = 32, 每个 warp 计算 16x16 矩阵时，需要在 K 维度上计算两次 mma 并累加
+    constexpr int MMA_M = 16;
+    constexpr int MMA_N = 16;
+    constexpr int MMA_K = 16;
+    constexpr int BK = 32;
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int block_size = 128; // 每个 block 含有多少线程数
     dim3 block(block_size);
     dim3 grid(div_up(N, BN), div_up(M, BM));
-    matmul_warp_kernel<BM, BN, BK, WM, WN><<<grid, block>>>(A, B, C, M, N, K);
+    matmul_warp_kernel<BM, BN, BK, MMA_M, MMA_N, MMA_K><<<grid, block>>>(A, B, C, M, N, K);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
 

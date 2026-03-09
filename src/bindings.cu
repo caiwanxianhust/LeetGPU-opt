@@ -236,6 +236,22 @@ void weight_dequantization_cuda(
 );
 
 
+void jacobi_stencil_2D_cuda(
+    const float* input, float* output, int rows, int cols
+);
+
+void stream_compaction_cuda(
+    const float* A, int N, float* out
+); 
+
+void moe_topk_gating_cuda(
+    const float* logits, float* topk_weights, int* topk_indices, int M, int E, int k
+);
+
+void gpt2_transformer_block_cuda(
+    const float* x, float* output, const float* weights, int seq_len
+);
+
 
 // -------------------------- Python 绑定函数 --------------------------
 torch::Tensor vector_add(
@@ -1620,6 +1636,66 @@ torch::Tensor weight_dequantization(
 }
 
 
+torch::Tensor jacobi_stencil_2D(const torch::Tensor& input)
+{
+    int cols = input.size(1);
+    int rows = input.size(0);
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    torch::Tensor output = torch::empty_like(input);
+    jacobi_stencil_2D_cuda(input.data_ptr<float>(), output.data_ptr<float>(), rows, cols);
+    return output;
+}
+
+torch::Tensor stream_compaction(const torch::Tensor& input)
+{
+    int N = input.size(0);
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    torch::Tensor output = torch::zeros_like(input);
+    stream_compaction_cuda(input.data_ptr<float>(), N, output.data_ptr<float>());
+    return output;
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor> moe_topk_gating(const torch::Tensor& logits, int k)
+{ 
+    TORCH_CHECK(logits.ndimension() == 2, "Logits must be 2D");
+    TORCH_CHECK(logits.device().is_cuda(), "Logits must be on CUDA");
+    TORCH_CHECK(logits.dtype() == torch::kFloat32, "Logits must be of type float32");
+    TORCH_CHECK(k > 0 && k <= logits.size(1), "Invalid k");
+    int M = logits.size(0);
+    int E = logits.size(1);
+    torch::Tensor topk_weights = torch::empty({M, k}, logits.options());
+    torch::Tensor topk_indices = torch::empty({M, k}, logits.options().dtype(torch::kInt32));
+    moe_topk_gating_cuda(
+        logits.data_ptr<float>(), 
+        topk_weights.data_ptr<float>(), 
+        topk_indices.data_ptr<int>(), 
+        M, E, k);
+    return {topk_weights, topk_indices};
+}
+
+
+torch::Tensor gpt2_transformer_block(
+    const torch::Tensor& x,
+    const torch::Tensor& weights
+) {
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(weights.ndimension() == 1, "weights must be 1D");
+
+    int seq_len = x.size(0);
+    int d_model = x.size(1);
+    torch::Tensor output = torch::empty({seq_len, d_model}, x.options());
+    gpt2_transformer_block_cuda(
+        x.data_ptr<float>(), 
+        output.data_ptr<float>(), 
+        weights.data_ptr<float>(), 
+        seq_len);
+    return output;
+}
+
+
+
+
 
 
 
@@ -1681,4 +1757,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("linear_self_attention", &linear_self_attention, "Linear Self Attention (CUDA)");
     m.def("sliding_window_self_attention", &sliding_window_self_attention, "Sliding Window Self Attention (CUDA)");
     m.def("weight_dequantization", &weight_dequantization, "Weight Dequantization (CUDA)");
+    m.def("jacobi_stencil_2D", &jacobi_stencil_2D, "Jacobi Stencil 2D (CUDA)");
+    m.def("stream_compaction", &stream_compaction, "Stream Compaction (CUDA)");
+    m.def("moe_topk_gating", &moe_topk_gating, "MoE TopK Gating (CUDA)");
+    m.def("gpt2_transformer_block", &gpt2_transformer_block, "GPT-2 Transformer Block (CUDA)");
 }
