@@ -12,6 +12,10 @@ void matrix_multiplication_cuda(
     const float* A, const float* B, float* C, int M, int N, int K
 );
 
+void matrix_multiplication_row_col_cuda(
+    const float* A, const float* B, float* C, int M, int N, int K
+);
+
 void convolution_1d_cuda(
     const float* input, const float* kernel, float* output, int input_size, int kernel_size
 );
@@ -253,6 +257,29 @@ void gpt2_transformer_block_cuda(
 );
 
 
+void all_pairs_shortest_paths_cuda(
+    const float* dist, float* output, int N
+); 
+
+namespace GQA {
+void gqa_cuda(
+    const float* Q, const float* K, const float* V, float* output,
+    int num_q_heads, int num_kv_heads, int seq_len, int head_dim
+);
+}
+
+void linear_recurrence_cuda(
+    const float* a, const float* x, float* h, int B, int L
+);
+
+void lora_linear_cuda(
+    const float* x, const float* W, const float* A, const float* B, float* output,
+    int batch, int d_in, int d_out, int rank, float lora_scale
+); 
+
+
+
+
 // -------------------------- Python 绑定函数 --------------------------
 torch::Tensor vector_add(
     const torch::Tensor& A,
@@ -280,7 +307,8 @@ torch::Tensor vector_add(
 
 torch::Tensor matrix_multiplication(
     const torch::Tensor& A,
-    const torch::Tensor& B
+    const torch::Tensor& B, 
+    const bool transpose_B = false
 ) { 
     TORCH_CHECK(A.ndimension() == 2, "Input A must be 2D");
     TORCH_CHECK(B.ndimension() == 2, "Input B must be 2D");
@@ -288,17 +316,35 @@ torch::Tensor matrix_multiplication(
     TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
     TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
     TORCH_CHECK(B.dtype() == torch::kFloat32, "Input B must be of type float32");
-    TORCH_CHECK(A.size(1) == B.size(0), "Input tensors must have compatible shapes");
-    int M = A.size(0), N = B.size(1), K = A.size(1);
+
     auto options = A.options();
-    torch::Tensor C = torch::empty({M, N}, options);
-    matrix_multiplication_cuda(
-        A.data_ptr<float>(),
-        B.data_ptr<float>(),
-        C.data_ptr<float>(),
-        M, N, K
-    );
-    return C;
+    torch::Tensor C;
+
+    if (transpose_B) {
+        TORCH_CHECK(A.size(1) == B.size(1), "Input tensors must have compatible shapes");
+        int M = A.size(0), N = B.size(0), K = A.size(1);
+        C = torch::empty({M, N}, options);
+        matrix_multiplication_row_col_cuda(
+            A.data_ptr<float>(),
+            B.data_ptr<float>(),
+            C.data_ptr<float>(),
+            M, N, K
+        );
+        return C;
+    }
+    else {
+        TORCH_CHECK(A.size(1) == B.size(0), "Input tensors must have compatible shapes");
+        int M = A.size(0), N = B.size(1), K = A.size(1);
+        C = torch::empty({M, N}, options);
+
+        matrix_multiplication_cuda(
+            A.data_ptr<float>(),
+            B.data_ptr<float>(),
+            C.data_ptr<float>(),
+            M, N, K
+        );
+        return C;
+    }
 }
 
 
@@ -1694,6 +1740,128 @@ torch::Tensor gpt2_transformer_block(
 }
 
 
+torch::Tensor all_pairs_shortest_paths(
+    const torch::Tensor& graph
+) {
+    TORCH_CHECK(graph.ndimension() == 2, "Graph must be 2D");
+    TORCH_CHECK(graph.device().is_cuda(), "Graph must be on CUDA");
+    TORCH_CHECK(graph.dtype() == torch::kFloat32, "Graph must be of type float32");
+    TORCH_CHECK(graph.size(0) == graph.size(1), "Graph must be a square matrix");
+
+    int N = graph.size(0);
+    torch::Tensor output = torch::empty_like(graph);
+    all_pairs_shortest_paths_cuda(
+        graph.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
+}
+
+
+torch::Tensor gqa(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V
+) {
+    TORCH_CHECK(Q.ndimension() == 3, "Q must be 3D");
+    TORCH_CHECK(K.ndimension() == 3, "K must be 3D");
+    TORCH_CHECK(V.ndimension() == 3, "V must be 3D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    int num_q_heads = Q.size(0);
+    int num_kv_heads = K.size(0);
+    int seq_len = Q.size(1);
+    int head_dim = Q.size(2);
+
+    TORCH_CHECK(K.size(1) == seq_len, "K must have the same sequence length as Q");
+    TORCH_CHECK(V.size(1) == seq_len, "V must have the same sequence length as Q");
+    TORCH_CHECK(K.size(2) == head_dim, "K must have the same head dimension as Q");
+    TORCH_CHECK(V.size(2) == head_dim, "V must have the same head dimension as Q");
+    TORCH_CHECK(num_q_heads % num_kv_heads == 0, "Number of Q heads must be a multiple of number of KV heads");
+
+    torch::Tensor output = torch::empty({num_q_heads, seq_len, head_dim}, Q.options());
+    GQA::gqa_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_q_heads, num_kv_heads, seq_len, head_dim
+    );
+    return output;
+}
+
+torch::Tensor linear_recurrence(
+    const torch::Tensor& a,
+    const torch::Tensor& x
+) {
+    TORCH_CHECK(a.ndimension() == 2, "a must be 2D");
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(a.size(0) == x.size(0), "The number of rows in a must match the number of rows in x");
+    TORCH_CHECK(a.size(1) == x.size(1), "The number of columns in a must match the number of columns in x");
+    TORCH_CHECK(a.device().is_cuda(), "a must be on CUDA");
+    TORCH_CHECK(x.device().is_cuda(), "x must be on CUDA");
+    TORCH_CHECK(a.dtype() == torch::kFloat32, "a must be of type float32");
+    TORCH_CHECK(x.dtype() == torch::kFloat32, "x must be of type float32");
+
+    int B = a.size(0);
+    int L = a.size(1);
+
+    torch::Tensor output = torch::empty_like(x);
+    linear_recurrence_cuda(
+        a.data_ptr<float>(),
+        x.data_ptr<float>(),
+        output.data_ptr<float>(),
+        B, L
+    );
+    return output;
+}
+
+
+torch::Tensor lora_linear(
+    const torch::Tensor& x,
+    const torch::Tensor& W,
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    float lora_scale
+) { 
+    int batch = x.size(0);
+    int d_in = x.size(1);
+    int d_out = W.size(0);
+    int rank = A.size(0);
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(W.ndimension() == 2, "W must be 2D");
+    TORCH_CHECK(A.ndimension() == 2, "A must be 2D");
+    TORCH_CHECK(B.ndimension() == 2, "B must be 2D");
+    TORCH_CHECK(x.device().is_cuda(), "x must be on CUDA");
+    TORCH_CHECK(W.device().is_cuda(), "W must be on CUDA"); 
+    TORCH_CHECK(A.device().is_cuda(), "A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "B must be on CUDA");
+    TORCH_CHECK(x.dtype() == torch::kFloat32, "x must be of type float32");
+    TORCH_CHECK(W.dtype() == torch::kFloat32, "W must be of type float32");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "A must be of type float32");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "B must be of type float32");
+    TORCH_CHECK(x.size(1) == W.size(1), "The number of columns in x must match the number of columns in W");
+    TORCH_CHECK(x.size(1) == A.size(1), "The number of columns in x must match the number of columns in A");
+    TORCH_CHECK(W.size(0) == B.size(0), "The number of rows in W must match the number of rows in B");
+    TORCH_CHECK(A.size(0) == B.size(1), "The number of rows in A must match the number of columns in B");
+
+    torch::Tensor output = torch::empty({batch, d_out}, x.options());
+    lora_linear_cuda(
+        x.data_ptr<float>(),
+        W.data_ptr<float>(),
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        output.data_ptr<float>(),
+        batch, d_in, d_out, rank, lora_scale
+    );
+    return output;
+}
+
 
 
 
@@ -1761,4 +1929,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("stream_compaction", &stream_compaction, "Stream Compaction (CUDA)");
     m.def("moe_topk_gating", &moe_topk_gating, "MoE TopK Gating (CUDA)");
     m.def("gpt2_transformer_block", &gpt2_transformer_block, "GPT-2 Transformer Block (CUDA)");
+    m.def("all_pairs_shortest_paths", &all_pairs_shortest_paths, "All Pairs Shortest Paths (CUDA)");
+    m.def("gqa", &gqa, "GQA (CUDA)");
+    m.def("linear_recurrence", &linear_recurrence, "Linear Recurrence (CUDA)");
+    m.def("lora_linear", &lora_linear, "LoRA Linear (CUDA)");
 }

@@ -69,6 +69,10 @@ setup(
                 "src/stream_compaction.cu",
                 "src/moe_topk_gating.cu",
                 "src/gpt2_transformer_block.cu",
+                "src/all_pairs_shortest_paths.cu",
+                "src/grouped_query_attention.cu",
+                "src/linear_recurrence.cu",
+                "src/lora_linear.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

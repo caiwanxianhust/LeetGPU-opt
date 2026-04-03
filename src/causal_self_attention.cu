@@ -41,7 +41,7 @@ namespace {
  * @param    d is the number of columns
  * @return   void
  */
-__global__ void qk_scaled_masked_kernel(const float* Q, const float* K, float* qk, int M, int d) {
+__global__ void qk_scaled_masked_kernel(const float* Q, const float* K, float* qk, int M, int d, float scale) {
     const int tx = threadIdx.x % TILE_SIZE;
     const int ty = threadIdx.x / TILE_SIZE;
     const int row_c = blockIdx.y * TILE_SIZE + ty;
@@ -75,7 +75,7 @@ __global__ void qk_scaled_masked_kernel(const float* Q, const float* K, float* q
         __syncthreads();
     }
     if (row_c < M && col_c < M) {
-        qk[row_c * M + col_c] = (row_c >= col_c) ? acc / sqrtf((float)d) : -FLT_MAX;
+        qk[row_c * M + col_c] = (row_c >= col_c) ? acc * scale : -FLT_MAX;
     }
 }
 
@@ -168,6 +168,8 @@ __global__ void matmul_fp32_kernel(const float* A, const float* B, float* C, int
 
 // Q, K, V, output are device pointers
 void causal_self_attention_cuda(const float* Q, const float* K, const float* V, float* output, int M, int d) {
+    float scale = 1.0f / sqrtf((float)d);
+
     float* d_buf;
     size_t buf_size = M * M * sizeof(float) * 2;
     CHECK_CUDA_ERROR(cudaMalloc(&d_buf, buf_size));
@@ -177,7 +179,7 @@ void causal_self_attention_cuda(const float* Q, const float* K, const float* V, 
     // qk scaled masked
     dim3 block(TILE_SIZE * TILE_SIZE);
     dim3 grid(div_up(M, TILE_SIZE), div_up(M, TILE_SIZE));
-    qk_scaled_masked_kernel<<<grid, block>>>(Q, K, qk, M, d);
+    qk_scaled_masked_kernel<<<grid, block>>>(Q, K, qk, M, d, scale);
 
     // softmax
     // each warp handles one row

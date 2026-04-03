@@ -70,14 +70,14 @@ def matrix_multiplication():
     N = 2997
     K = 4001
     a = torch.randn(M, K, device="cuda", dtype=torch.float32)
-    b = torch.randn(K, N, device="cuda", dtype=torch.float32)
+    b = torch.randn(N, K, device="cuda", dtype=torch.float32)
 
     # 用 PyTorch 实现
-    torch_out = torch.matmul(a, b)
+    torch_out = torch.matmul(a, b.transpose(0, 1))
 
     # 用 LeetGPU 实现
     start_time = time.time()
-    c = leetgpu.matmul(a, b)
+    c = leetgpu.matmul(a, b, True)
     elapse_time = time.time() - start_time
     print(f"CUDA Time taken: {elapse_time * 1000} ms")
 
@@ -2091,6 +2091,7 @@ Performance is measured with M = 1,024, k = 2
     compare_tensors(topk_weights, touch_topk_weights, atol=1e-3, rtol=1e-3, max_print=10)
     compare_tensors(topk_indices, touch_topk_indices, max_print=10)
 
+
 def gpt2_transformer_block():
     # 测试
     seq_len = 128
@@ -2194,9 +2195,319 @@ def gpt2_transformer_block():
     compare_tensors(out, fc_out, atol=1e-2, rtol=1e-2, max_print=10)
 
 
+def all_pairs_shortest_paths():
+    # 测试
+    N = 4096
+    adj_matrix = torch.randint(0, 10, (N, N), device="cuda", dtype=torch.float32)
+
+    # 用 PyTorch 实现
+    # 用 Floyd-Warshall 算法计算所有节点对之间的最短路径
+    """
+    下面是Floyd-Warshall算法的Python代码实现：
+def floyd_warshall(graph):
+   # 初始化距离矩阵
+   dist = [[float('inf') for _ in range(len(graph))] for _ in range(len(graph))]
+   for i in range(len(graph)):
+       dist[i][i] = 0
+   for i in range(len(graph)):
+       for j in range(len(graph)):
+           if graph[i][j] != 0:
+               dist[i][j] = graph[i][j]
+   # 动态规划更新最短路径
+   for k in range(len(graph)):
+       for i in range(len(graph)):
+           for j in range(len(graph)):
+               if dist[i][k] + dist[k][j] < dist[i][j]:
+                   dist[i][j] = dist[i][k] + dist[k][j]
+   return dist
+    """
+
+    @timeit
+    def floyd_warshall_pytorch(graph):
+        """
+        使用PyTorch实现Floyd-Warshall算法计算所有节点对之间的最短路径
+        
+        参数:
+        graph: torch.Tensor, 形状为[N, N]的邻接矩阵，其中graph[i][j]表示从节点i到节点j的边权重
+            如果没有直接连接，则值为float('inf')
+        
+        返回:
+        torch.Tensor: 最短路径距离矩阵
+        """
+        # 将输入图复制到一个新的张量中
+        dist = graph.clone()
+        N = dist.shape[0]
+        
+        # Floyd-Warshall算法的核心循环
+        # 对于每个中间节点k，检查是否通过k可以缩短任意两点间的距离
+        for k in range(N):
+            # 使用向量化操作来替代内部的两层循环
+            # dist[i][j] = min(dist[i][j], dist[i][k] + dist[k][j])
+            dist = torch.minimum(dist, dist[:, k:k+1] + dist[k:k+1, :])
+            
+        return dist
+
+     # 将对角线设为0（自己到自己的距离为0）
+    adj_matrix.fill_diagonal_(float('inf'))
+    adj_matrix[adj_matrix == 0] = float('inf')
+    adj_matrix.fill_diagonal_(0)
+
+    # 用 Floyd-Warshall 算法计算所有节点对之间的最短路径
+    torch_out = floyd_warshall_pytorch(adj_matrix)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_all_pairs_shortest_paths(graph):
+        leetgpu_out = leetgpu.all_pairs_shortest_paths(graph)
+        return leetgpu_out
+    
+    out = leetgpu_all_pairs_shortest_paths(adj_matrix)
+    
+    # 打印结果
+    print("Adjacency Matrix")
+    print(adj_matrix[:5, :5])
+    print("LeetGPU Output")
+    print(out[:5, :5])
+    print("PyTorch Output")
+    print(torch_out[:5, :5])
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
+def gqa():
+    """
+Implement Grouped Query Attention (GQA), the attention mechanism used in modern large language models such as LLaMA-3, Mistral, and Gemma. GQA reduces the KV-cache memory footprint during inference by sharing key and value heads across groups of query heads. Given query tensor Q with num_q_heads heads and key/value tensors K, V each with num_kv_heads heads, compute scaled dot-product attention where every group of num_q_heads / num_kv_heads consecutive query heads attends to the same key and value head. All tensors use float32.
 
+scale = 1 / sqrt(head_dim)
+scores = Q @ K^T * scale
+weights = softmax(scores)
+output = weights @ V
+
+Implementation Requirements
+Implement the function solve(Q, K, V, output, num_q_heads, num_kv_heads, seq_len, head_dim).
+Do not change the function signature or use external libraries beyond the standard GPU frameworks.
+Write the result into the provided output buffer.
+num_q_heads is always divisible by num_kv_heads.
+Use scaled dot-product attention with scale factor 1 / sqrt(head_dim) and a softmax over the key dimension.
+
+Constraints
+1 ≤ num_kv_heads ≤ num_q_heads ≤ 64
+num_q_heads is divisible by num_kv_heads
+1 ≤ seq_len ≤ 4,096
+8 ≤ head_dim ≤ 256; head_dim is a multiple of 8
+All tensor values are float32
+Performance is measured with num_q_heads = 32, num_kv_heads = 8, seq_len = 1,024, head_dim = 128
+    """
+    num_q_heads = 32
+    num_kv_heads = 8
+    seq_len = 1024
+    head_dim = 128
+
+    # Q = [[[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 1.0, 0.0], [1.0, 1.0, 0.0, 0.0]],
+    #      [[0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0]],
+    #      [[-1.0, 0.0, 0.5, 0.0], [0.0, -1.0, 0.0, 0.5], [0.5, 0.0, -1.0, 0.0]],
+    #      [[0.0, 0.5, 0.0, -1.0], [0.5, 0.0, 0.0, -1.0], [0.0, 0.0, 0.5, 0.5]]]
+    # K = [[[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]],
+    #      [[0.0, 1.0, 0.0, -1.0], [-1.0, 0.0, 1.0, 0.0], [0.0, -1.0, 0.0, 1.0]]]
+    # V = [[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]],
+    #      [[-1.0, -2.0, -3.0, -4.0], [2, 3, 4, 5], [6, 7, 8, 9]]]
+    # Q = torch.tensor(Q, device="cuda", dtype=torch.float32)
+    # K = torch.tensor(K, device="cuda", dtype=torch.float32)
+    # V = torch.tensor(V, device="cuda", dtype=torch.float32)
+
+    Q = torch.rand(num_q_heads, seq_len, head_dim, device="cuda", dtype=torch.float32)
+    K = torch.rand(num_kv_heads, seq_len, head_dim, device="cuda", dtype=torch.float32)
+    V = torch.rand(num_kv_heads, seq_len, head_dim, device="cuda", dtype=torch.float32)
+
+    # LeetGPU 实现
+    @timeit
+    def leetgpu_gqa(Q, K, V):
+        out = leetgpu.gqa(Q, K, V)
+        return out
+    out = leetgpu_gqa(Q, K, V)
+
+    # 用 PyTorch 实现
+    @timeit
+    def grouped_query_attention_optimized(Q, K, V):
+        """
+        优化版的GQA实现，不需要显式传入维度参数，从tensor中推断
+        
+        Args:
+            Q: Query tensor, shape (num_q_heads, seq_len, head_dim)
+            K: Key tensor, shape (num_kv_heads, seq_len, head_dim)
+            V: Value tensor, shape (num_kv_heads, seq_len, head_dim)
+        
+        Returns:
+            Output tensor, shape (num_q_heads, seq_len, head_dim)
+        """
+        num_q_heads, seq_len, head_dim = Q.shape
+        num_kv_heads = K.shape[0]
+        
+        # 计算缩放因子
+        scale = 1.0 / torch.sqrt(torch.tensor(head_dim, dtype=torch.float32, device=Q.device))
+        
+        # 计算每组查询头的数量
+        heads_per_group = num_q_heads // num_kv_heads
+        
+        # 重塑Q以便批量处理同一组内的查询头
+        Q_reshaped = Q.view(num_kv_heads, heads_per_group, seq_len, head_dim)
+        
+        # 扩展K和V以匹配查询头的形状
+        K_expanded = K.unsqueeze(1).expand(-1, heads_per_group, -1, -1)  # (num_kv_heads, heads_per_group, seq_len, head_dim)
+        V_expanded = V.unsqueeze(1).expand(-1, heads_per_group, -1, -1)  # (num_kv_heads, heads_per_group, seq_len, head_dim)
+        
+        # 计算注意力分数: (num_kv_heads, heads_per_group, seq_len, seq_len)
+        scores = torch.matmul(Q_reshaped, K_expanded.transpose(-2, -1)) * scale
+        
+        # 应用softmax
+        weights = F.softmax(scores, dim=-1)  # (num_kv_heads, heads_per_group, seq_len, seq_len)
+        
+        # 计算输出: (num_kv_heads, heads_per_group, seq_len, head_dim)
+        output = torch.matmul(weights, V_expanded)
+        
+        # 重塑回原始形状 (num_q_heads, seq_len, head_dim)
+        output = output.view(num_q_heads, seq_len, head_dim)
+        
+        return output
+
+    torch_out = grouped_query_attention_optimized(Q, K, V)
+
+    # 打印结果
+    print("Q")
+    print(Q[:5, :5, :5])
+    print("K")
+    print(K[:5, :5, :5])
+    print("V")
+    print(V[:5, :5, :5])
+    print("LeetGPU Output")
+    print(out[:5, :5, :5])
+    print("PyTorch Output")
+    print(torch_out[:5, :5, :5])
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def linear_recurrence():
+    """
+    Given two matrices a and x, each of shape [B, L] (batch size × sequence length), compute the linear recurrence h of shape [B, L] defined by: h[b, 0] = x[b, 0] and h[b, t] = a[b, t] × h[b, t−1] + x[b, t] for t ≥ 1. All values are float32. This operation is the core computational primitive of State Space Models (SSMs) such as Mamba, S4, and H3.
+
+Linear Recurrence: h[t] = a[t] · h[t-1] + x[t]
+
+Implementation Requirements
+Use only native features (external libraries are not permitted)
+The solve function signature must remain unchanged
+The result must be stored in the output tensor h
+
+Constraints
+1 ≤ B ≤ 256 (batch size)
+1 ≤ L ≤ 65,536 (sequence length)
+All values in a and x are float32
+Performance is measured with B = 64, L = 16,384
+    """
+    # 测试
+    B = 500
+    L = 128 * 64
+    a = torch.rand(B, L, device="cuda", dtype=torch.float32) 
+    x = torch.rand(B, L, device="cuda", dtype=torch.float32)
+
+    # 用 leetGPU 实现
+    @timeit
+    def leetgpu_linear_recurrence(a, x):
+        out = leetgpu.linear_recurrence(a, x)
+        return out
+
+    out = leetgpu_linear_recurrence(a, x)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_linear_recurrence(a, x):
+        h = torch.zeros_like(x)
+        h[:, 0] = x[:, 0]
+        for t in range(1, L):
+            h[:, t] = a[:, t] * h[:, t-1] + x[:, t]
+        return h
+
+    torch_out = pytorch_linear_recurrence(a, x)
+
+    # 打印结果
+    print("Batch Size:", B, "Sequence Length:", L)
+    print("a")
+    print(a[:5, :5])
+    print("x")
+    print(x[:5, :5])
+    print("LeetGPU Output")
+    print(out[:5, :5])
+    print("PyTorch Output")
+    print(torch_out[:5, :5])
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def lora_linear():
+    """
+    https://leetgpu.com/challenges/lora-linear
+Implement a LoRA (Low-Rank Adaptation) linear layer forward pass. Given an input matrix x of shape batch × d_in, a base weight matrix W of shape d_out × d_in, a LoRA down-projection matrix A of shape rank × d_in, and a LoRA up-projection matrix B of shape d_out × rank, compute output = x × WT + lora_scale × (x × AT) × BT. All tensors are float32.
+
+Implementation Requirements
+Implement the solve function; do not change its signature.
+Do not use external libraries beyond those provided.
+Write the result into output.
+
+Constraints
+1 ≤ batch ≤ 1,024
+1 ≤ d_in, d_out ≤ 8,192
+1 ≤ rank ≤ 256; rank < min(d_in, d_out)
+All tensors are float32 on GPU.
+Performance is measured with batch = 256, d_in = 4,096, d_out = 4,096, rank = 64
+    """
+    # 测试
+    batch = 259
+    d_in = 2999
+    d_out = 3777
+    rank = 64
+    lora_scale = 0.5
+    x = torch.randn(batch, d_in, device="cuda", dtype=torch.float32)
+    W = torch.randn(d_out, d_in, device="cuda", dtype=torch.float32)
+    A = torch.randn(rank, d_in, device="cuda", dtype=torch.float32)
+    B = torch.randn(d_out, rank, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_lora_linear(x, W, A, B, lora_scale):
+        out = leetgpu.lora_linear(x, W, A, B, lora_scale)
+        return out
+
+    out = leetgpu_lora_linear(x, W, A, B, lora_scale)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_lora_linear(x, W, A, B, lora_scale):
+        out = torch.matmul(x, W.T) + lora_scale * torch.matmul(torch.matmul(x, A.T), B.T)
+        # out = torch.matmul(torch.matmul(x, A.T), B.T)
+        return out
+
+    torch_out = pytorch_lora_linear(x, W, A, B, lora_scale)
+
+    # 打印结果
+    print("Batch Size:", batch, "Input Dimension:", d_in, "Output Dimension:", d_out, "Rank:", rank)
+    print("x")
+    print(x[:5, :5])
+    print("W")
+    print(W[:5, :5])
+    print("A")
+    print(A[:5, :5])
+    print("B")
+    print(B[:5, :5])
+    print("LeetGPU Output")
+    print(out)
+    print("PyTorch Output")
+    print(torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
 
@@ -2260,4 +2571,8 @@ if __name__ == "__main__":
     # jacobi_stencil_2D()
     # stream_compaction()
     # moe_topk_gating()
-    gpt2_transformer_block()
+    # gpt2_transformer_block()
+    # all_pairs_shortest_paths()
+    # gqa()
+    # linear_recurrence()
+    lora_linear()

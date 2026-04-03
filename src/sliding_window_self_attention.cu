@@ -10,7 +10,7 @@ static __host__ __device__ int div_up(int a, int b) {
 }
 
 
-__global__ void sw_attn_kernel(
+__global__ void sw_attn_warp_reduce_kernel(
     const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
 ) {
     int warp_id = threadIdx.x / 32;
@@ -30,7 +30,6 @@ __global__ void sw_attn_kernel(
         int k_start_row = (row_id - window_size) >= 0 ? (row_id - window_size) : 0;
         int k_end_row = (row_id + window_size) < M ? (row_id + window_size) : (M - 1);
         int real_window_size = k_end_row - k_start_row + 1;
-        float scale = rsqrtf((float)d);
         for (int k_row = k_start_row; k_row <= k_end_row; k_row++) {
             float qk = 0.0f;
             for (int i = lane_id; i < d; i += 32) {
@@ -40,9 +39,10 @@ __global__ void sw_attn_kernel(
             // warp-level reduction
             qk = warp_all_reduce_sum(qk);
             if (lane_id == 0) {
-                qk = qk * scale;
+                qk = qk / sqrtf((float)d);
                 s_qk[warp_id][k_row - k_start_row] = qk;
                 max_val = max(max_val, qk);
+                // printf("row_id: %d, qk: %f\n", row_id, qk);
             }
         }
         __syncwarp();
@@ -52,12 +52,12 @@ __global__ void sw_attn_kernel(
             for (int i = 0; i < real_window_size; i++) {
                 sum_exp += expf(s_qk[warp_id][i] - max_val);
             }
-
-            sum_exp = 1.0f / sum_exp;
+            // printf("row_id: %d, sum_exp: %f\n", row_id, sum_exp);
 
             for (int i = 0; i < real_window_size; i++) {
                 // normalize
-                s_qk[warp_id][i] = expf(s_qk[warp_id][i] - max_val) * sum_exp;
+                s_qk[warp_id][i] = expf(s_qk[warp_id][i] - max_val) / sum_exp;
+                // printf("row_id: %d, i: %d, s_qk: %f\n", row_id, i, s_qk[warp_id][i]);
             }
         }
         __syncwarp();
@@ -74,7 +74,7 @@ __global__ void sw_attn_kernel(
 }
 
 
-__global__ void sw_attn_kernel_without_warp_reduce(
+__global__ void sw_attn_naive_kernel(
     const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
 ) { 
     int row_id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -122,22 +122,100 @@ __global__ void sw_attn_kernel_without_warp_reduce(
 }
 
 
-// Q, K, V, output are device pointers
-void sliding_window_self_attention_cuda(
+__global__ void sw_attn_serial_accumulation_kernel(
+    const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
+) { 
+    const int warp_id = threadIdx.x >> 5;
+    const int lane_id = threadIdx.x & 0x1f;
+    const int row_id = blockIdx.x * (blockDim.x >> 5) + warp_id;  // each warp processes one query
+    if (row_id >= M) return;
+
+    __shared__ float s_qk[4][128];
+    for (int i = lane_id; i < 128; i += 32) {
+        s_qk[warp_id][i] = -FLT_MAX;
+    }
+    __syncwarp();
+
+    float max_val = -FLT_MAX;
+    float sum_exp = 0.0f;
+
+    // compute QK^T for the sliding window
+    int k_start_row = (row_id - window_size) >= 0 ? (row_id - window_size) : 0;
+    int k_end_row = (row_id + window_size) < M ? (row_id + window_size) : (M - 1);
+    int real_window_size = k_end_row - k_start_row + 1;
+    float scale = rsqrtf((float)d);
+    for (int i = lane_id; i < real_window_size; i += 32) {
+        int k_row = k_start_row + i;
+        float qk = 0.0f;
+        for (int j = 0; j < d; j++) {
+            qk += Q[row_id * d + j] * K[k_row * d + j];
+        }
+        qk *= scale;
+        s_qk[warp_id][i] = qk;
+        max_val = max(max_val, qk);
+    }
+    __syncwarp();
+
+    max_val = warp_all_reduce_max(max_val);
+
+    for (int i = lane_id; i < real_window_size; i += 32) {
+        float val = expf(s_qk[warp_id][i] - max_val);
+        s_qk[warp_id][i] = val;
+        sum_exp += val;
+    }
+    __syncwarp();
+
+    sum_exp = warp_all_reduce_sum(sum_exp);
+
+    for (int i = lane_id; i < d; i += 32) {
+        float attn_val = 0.0f;
+        for (int j = 0; j < real_window_size; j++) {
+            int k_row = k_start_row + j;
+            attn_val += (s_qk[warp_id][j] / sum_exp) * V[k_row * d + i];
+        }
+        output[row_id * d + i] = attn_val;
+    }
+}
+
+
+void sliding_window_self_attention_warp_reduce_cuda(
     const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
 ) {
     // with warp reduce
     // each warp handles one query
     dim3 block(128);
     dim3 grid(div_up(M, 4));
-    sw_attn_kernel<<<grid, block>>>(Q, K, V, output, M, d, window_size);
+    sw_attn_warp_reduce_kernel<<<grid, block>>>(Q, K, V, output, M, d, window_size);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
 
-    // without warp reduce
+void sliding_window_self_attention_naive_cuda(
+    const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
+) {
     // each thread handles one query
-    // dim3 block(128);
-    // dim3 grid(div_up(M, 128));
-    // sw_attn_kernel_without_warp_reduce<<<grid, block>>>(Q, K, V, output, M, d, window_size);
-    // CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+    dim3 block(128);
+    dim3 grid(div_up(M, 128));
+    sw_attn_naive_kernel<<<grid, block>>>(Q, K, V, output, M, d, window_size);
+    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+void sliding_window_self_attention_serial_accumulation_cuda(
+    const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
+) {
+    // without warp reduce, by serial accumulation instead of parallel reduction
+    // each warp handles one query
+    dim3 block(128);
+    dim3 grid(div_up(M, 4));
+    sw_attn_serial_accumulation_kernel<<<grid, block>>>(Q, K, V, output, M, d, window_size);
+    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+// Q, K, V, output are device pointers
+void sliding_window_self_attention_cuda(
+    const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
+) {
+    sliding_window_self_attention_serial_accumulation_cuda(Q, K, V, output, M, d, window_size);
 }
 
