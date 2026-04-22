@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include <cfloat>
+#include <cub/cub.cuh>
 
 /*
 Write a program that sorts an array of 32-bit floating-point numbers in ascending order. You are free to choose any sorting algorithm.
@@ -16,6 +17,7 @@ Constraints
 1 ≤ N ≤ 1,000,000
 */
 
+namespace bitonic_sort {
 __global__ void bitonic_sort_step(float* data, int N, int j, int k) {
     int i = blockDim.x * blockIdx.x + threadIdx.x;
     int l = i ^ j;
@@ -46,7 +48,8 @@ __device__ __host__ int next_power_of_two(int n) {
 
 
 // ===================== 主机端入口函数（data为设备端指针）=====================
-void sort_cuda(float* data, int N) {
+void sort_bitonic_cuda(float* data, int N) {
+    printf("bitonic_sort\n");
     if (N <= 1) return;
 
     int paddedN = next_power_of_two(N);
@@ -79,4 +82,40 @@ void sort_cuda(float* data, int N) {
         cudaMemcpy(data, sortData, N * sizeof(float), cudaMemcpyDeviceToDevice);
         cudaFree(sortData);
     }
+}
+
+} // namespace bitonic_sort
+
+
+namespace cub_sort {
+
+void sort_cub_cuda(float* data, int N) { 
+    printf("cub_sort\n");
+    float *sortData;
+    CHECK_CUDA_ERROR(cudaMalloc(&sortData, N * sizeof(float)));
+
+    void     *d_temp_storage = nullptr;
+    size_t   temp_storage_bytes = 0;
+    cub::DeviceRadixSort::SortKeys(
+    d_temp_storage, temp_storage_bytes, data, sortData, N);
+
+    // Allocate temporary storage
+    CHECK_CUDA_ERROR(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+
+    // Run sorting operation
+    cub::DeviceRadixSort::SortKeys(
+    d_temp_storage, temp_storage_bytes, data, sortData, N);
+
+    // Copy the sorted data back to the original array
+    CHECK_CUDA_ERROR(cudaMemcpy(data, sortData, N * sizeof(float), cudaMemcpyDeviceToDevice));
+    CHECK_CUDA_ERROR(cudaFree(sortData));
+    CHECK_CUDA_ERROR(cudaFree(d_temp_storage));
+}
+
+} // namespace cub_sort
+
+
+void sort_cuda(float* data, int N) {
+    bitonic_sort::sort_bitonic_cuda(data, N);
+    // cub_sort::sort_cub_cuda(data, N);
 }

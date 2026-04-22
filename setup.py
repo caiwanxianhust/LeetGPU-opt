@@ -73,6 +73,11 @@ setup(
                 "src/grouped_query_attention.cu",
                 "src/linear_recurrence.cu",
                 "src/lora_linear.cu",
+                "src/int4_weight_only_quantized_matMul.cu",
+                "src/topp_sampling.cu",
+                "src/fft_2D.cu",
+                "src/fast_fft.cu",  # 添加 fast_fft.cu
+                "src/int8_kvcache_attntion.cu",
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

@@ -91,8 +91,8 @@ static __global__ void matmul_rc_kernel(const float* A, const float* B, float* C
     int laneId = threadIdx.x & 31;
     int warpx = warpId & (THREAD_C_WARP_DIM_X - 1); // 0-1
     int warpy = warpId / THREAD_C_WARP_DIM_X;       // 0-3
-    int lanex = (laneId & 15) >> 1; // 取低 4 位右移 1 位 -> 0-7
-    int laney = ((laneId >> 4) << 1) + (laneId & 1); // 取最高位左移 1 + 最低位 -> 0-3
+    int lanex = laneId & 7; // 0-7
+    int laney = laneId >> 3; // 0-3
     int tCx = warpx * THREAD_C_WARP_X + lanex; // 0-15
     int tCy = warpy * THREAD_C_WARP_Y + laney; // 0-15
 
@@ -148,9 +148,12 @@ static __global__ void matmul_rc_kernel(const float* A, const float* B, float* C
                 FLOAT4(tCsA[tk & 1][0]) = FLOAT4(sA[bufferId][tk][ (tCy * THREAD_C_Y_TILE_SIZE) ^ (tk << 2) ]);
                 FLOAT4(tCsA[tk & 1][4]) = FLOAT4(sA[bufferId][tk][(tCy * THREAD_C_Y_TILE_SIZE + 4) ^ (tk << 2)]);
 
-                // 从共享内存加载 B 矩阵到寄存器，每次加载连续的 8 个 float
-                FLOAT4(tCsB[tk & 1][0]) = FLOAT4(sB[bufferId][tk][(tCx * THREAD_C_X_TILE_SIZE) ^ (tk << 2)]);
-                FLOAT4(tCsB[tk & 1][4]) = FLOAT4(sB[bufferId][tk][(tCx * THREAD_C_X_TILE_SIZE + 4) ^ (tk << 2)]);
+                // 从共享内存加载 B 矩阵到寄存器，每次加载连续的 4 个 float
+                #pragma unroll
+                for (int tn = 0; tn < THREAD_C_X_TILE_SIZE >> 2; tn++) {
+                    int c = (tCx + tn * THREAD_C_LAYOUT_X) << 2; // 计算 B 矩阵中对应的列索引
+                    FLOAT4(tCsB[tk & 1][tn << 2]) = FLOAT4(sB[bufferId][tk][c ^ (tk << 2)]);
+                }
             }
         }
 
@@ -189,7 +192,7 @@ static __global__ void matmul_rc_kernel(const float* A, const float* B, float* C
         int r = row0 + tCy * THREAD_C_Y_TILE_SIZE + i; // C 的行索引
         #pragma unroll
         for (int j = 0; j < THREAD_C_X_TILE_SIZE; j++) {
-            int c = col0 + tCx * THREAD_C_X_TILE_SIZE + j; // C 的列索引
+            int c = col0 + (tCx << 2) + (j & (~3)) * THREAD_C_LAYOUT_X + (j & 3);
             if (r < M && c < N) {
                 C[r * N + c] = acc[i][j];
             }

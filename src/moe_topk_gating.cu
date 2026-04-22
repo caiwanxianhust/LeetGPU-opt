@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <cfloat>
+
 /*
 MoE Top-K Gating
 Medium
@@ -42,6 +44,20 @@ static __host__ __device__ __forceinline__ int div_up(int x, int y) {
 }
 
 
+static __device__ __forceinline__ void insert_to_min_heap(float *heap, int *heap_idx, float val, int idx, int k) {
+    if (val < heap[k - 1]) return;
+    int i = k - 2;
+    while (i >= 0 && heap[i] < val) {
+        heap[i + 1] = heap[i];
+        heap_idx[i + 1] = heap_idx[i];
+        i--;
+    }
+    heap[i + 1] = val;
+    heap_idx[i + 1] = idx;
+}
+
+
+
 __global__ void moe_topk_gating_kernel(const float* logits, float* topk_weights, int* topk_indices, int M, int E, int k) {
     int lane_id = threadIdx.x % 32;
     int warp_id = threadIdx.x / 32;
@@ -56,6 +72,8 @@ __global__ void moe_topk_gating_kernel(const float* logits, float* topk_weights,
 
     for (int i = lane_id; i < E; i += 32) {
         s_buf[warp_id][i] = logits[row_id * E + i];
+        s_min_heap[warp_id][i] = -FLT_MAX;
+        s_min_heap_idx[warp_id][i] = -1;
     }
     __syncwarp();
 
@@ -63,37 +81,15 @@ __global__ void moe_topk_gating_kernel(const float* logits, float* topk_weights,
     if (lane_id == 0) {
         int heap_size = 0;
         for (int i = 0; i < E; i++) {
-            // heap not full
-            if (heap_size < k) {
-                // insert new value
-                s_min_heap[warp_id][heap_size] = s_buf[warp_id][i];
-                s_min_heap_idx[warp_id][heap_size] = i;
-                heap_size++;
-                // sort heap, desc
-                for (int j = heap_size - 1; j > 0 && s_min_heap[warp_id][j] > s_min_heap[warp_id][j - 1]; j--) {
-                    float tmp = s_min_heap[warp_id][j];
-                    int tmp_idx = s_min_heap_idx[warp_id][j];
-                    s_min_heap[warp_id][j] = s_min_heap[warp_id][j - 1];
-                    s_min_heap_idx[warp_id][j] = s_min_heap_idx[warp_id][j - 1];
-                    s_min_heap[warp_id][j - 1] = tmp;
-                    s_min_heap_idx[warp_id][j - 1] = tmp_idx;
-                }
-            } else {
-                float min_val = s_min_heap[warp_id][heap_size - 1];
-                if (logits[row_id * E + i] > min_val) {
-                    s_min_heap[warp_id][heap_size - 1] = logits[row_id * E + i];
-                    s_min_heap_idx[warp_id][heap_size - 1] = i;
-                    // sort heap
-                    for (int j = heap_size - 1; j > 0 && s_min_heap[warp_id][j] > s_min_heap[warp_id][j - 1]; j--) {
-                        float tmp = s_min_heap[warp_id][j];
-                        int tmp_idx = s_min_heap_idx[warp_id][j];
-                        s_min_heap[warp_id][j] = s_min_heap[warp_id][j - 1];
-                        s_min_heap_idx[warp_id][j] = s_min_heap_idx[warp_id][j - 1];
-                        s_min_heap[warp_id][j - 1] = tmp;
-                        s_min_heap_idx[warp_id][j - 1] = tmp_idx;
-                    }
-                }
-            }
+            heap_size = heap_size < k ? heap_size + 1 : k;
+            insert_to_min_heap(s_min_heap[warp_id], s_min_heap_idx[warp_id], s_buf[warp_id][i], i, heap_size);
+            // // heap not full
+            // if (heap_size < k) {
+            //     heap_size++;
+            //     insert_to_min_heap(s_min_heap[warp_id], s_min_heap_idx[warp_id], s_buf[warp_id][i], i, heap_size);
+            // } else {
+            //     insert_to_min_heap(s_min_heap[warp_id], s_min_heap_idx[warp_id], s_buf[warp_id][i], i, k);
+            // }
         }
 
         float max_val = s_min_heap[warp_id][0];

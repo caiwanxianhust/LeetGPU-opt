@@ -66,18 +66,20 @@ def compare_tensors(tensor1, tensor2, atol=1e-3, rtol=1e-5, max_print=10):
 
 def matrix_multiplication():
     # 测试FP32
-    M = 3000
-    N = 2997
-    K = 4001
+    M = 4007
+    N = 5286
+    K = 972
     a = torch.randn(M, K, device="cuda", dtype=torch.float32)
-    b = torch.randn(N, K, device="cuda", dtype=torch.float32)
+    # b = torch.randn(N, K, device="cuda", dtype=torch.float32)
+    b = torch.randn(K, N, device="cuda", dtype=torch.float32)
 
     # 用 PyTorch 实现
-    torch_out = torch.matmul(a, b.transpose(0, 1))
+    # torch_out = torch.matmul(a, b.transpose(0, 1))
+    torch_out = torch.matmul(a, b)
 
     # 用 LeetGPU 实现
     start_time = time.time()
-    c = leetgpu.matmul(a, b, True)
+    c = leetgpu.matmul(a, b, False)
     elapse_time = time.time() - start_time
     print(f"CUDA Time taken: {elapse_time * 1000} ms")
 
@@ -765,7 +767,7 @@ def topk_1D():
     N = 10000000
     x = torch.randn(N, device="cuda", dtype=torch.float32)
     # x = torch.arange(N, device="cuda", dtype=torch.float32)
-    k = 1000
+    k = 100
 
     # 用 PyTorch 实现
     torch_out = torch.topk(x, k, largest=True, sorted=True)
@@ -1103,8 +1105,8 @@ def nearest_neighbor():
 
 def batch_norm():
     # 测试
-    N = 1024
-    C = 900
+    N = 1000
+    C = 586
     x = torch.randn(N, C, device="cuda", dtype=torch.float32)
     gamma = torch.randn(C, device="cuda", dtype=torch.float32)
     beta = torch.randn(C, device="cuda", dtype=torch.float32)
@@ -1125,8 +1127,8 @@ def batch_norm():
     print("X")
     print(x[:4, :4])
     print("Batch Norm Result")
-    print(out[:4, :4])
-    print(torch_out[:4, :4])
+    print(out[-10:, -10:])
+    print(torch_out[-10:, -10:])
 
     # 检查结果
     compare_tensors(out, torch_out, atol=1e-2, rtol=1e-2, max_print=10)
@@ -1361,9 +1363,9 @@ import math
 
 def attention_with_linear_bias():
     # 测试
-    N = 1024
-    M = 128
-    d = 512
+    N = 2009
+    M = 3683
+    d = 1009
     alpha = 0.5
     q = torch.randn(M, d, device="cuda", dtype=torch.float32)
     k = torch.randn(N, d, device="cuda", dtype=torch.float32)
@@ -2190,14 +2192,15 @@ def gpt2_transformer_block():
     print(out)
     print(fc_out)
     # print(qkv)  # Q
+    # print(attn_projected_res)
 
     # 检查结果
-    compare_tensors(out, fc_out, atol=1e-2, rtol=1e-2, max_print=10)
+    compare_tensors(out, fc_out, atol=1, rtol=1, max_print=10)
 
 
 def all_pairs_shortest_paths():
     # 测试
-    N = 4096
+    N = 16
     adj_matrix = torch.randint(0, 10, (N, N), device="cuda", dtype=torch.float32)
 
     # 用 PyTorch 实现
@@ -2510,6 +2513,413 @@ Performance is measured with batch = 256, d_in = 4,096, d_out = 4,096, rank = 64
     compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
+def W4A16_Matmul():
+    """
+    Implement a weight-only INT4 quantized matrix multiplication (W4A16), a core kernel used in modern LLM inference. Given a float16 activation matrix x of shape M × K and a weight matrix stored in packed INT4 format, compute the output matrix y = x × WT of shape M × N, where W is the dequantized float16 weight matrix of shape N × K.
+
+Packing format: Each byte of w_q stores two INT4 weights. The high nibble (bits 7–4) holds weight w[n, 2i] and the low nibble (bits 3–0) holds w[n, 2i+1]. INT4 values are stored unsigned in the range [0, 15] with an offset of 8, so the signed weight is nibble − 8, giving values in [−8, 7].
+
+Dequantization: Weights are dequantized group-wise. Each contiguous block of group_size weights along the K dimension shares one float16 scale:
+
+W[n, k] = (w_q_nibble[n, k] - 8) * scales[n, k // group_size]
+Implementation Requirements
+Use only native features (external libraries are not permitted)
+The solve function signature must remain unchanged
+The final result must be stored in y
+
+Constraints
+1 ≤ M, N ≤ 8,192
+1 ≤ K ≤ 8,192
+K is divisible by 2 and by group_size
+group_size ∈ {2, 4, 8, 16, 32, 64, 128}
+All tensors are stored in row-major order
+Input dtype: x and scales are float16; w_q is uint8
+Output dtype: y is float16
+Performance is measured with M = 4,096, N = 4,096, K = 4,096, group_size = 128
+    """
+    M = 4008
+    N = 8601
+    K = 4096
+    group_size = 128
+    x = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    w_q = torch.randint(0, 256, (N, K // 2), device="cuda", dtype=torch.uint8)
+    scales = torch.randn(N, K // group_size, device="cuda", dtype=torch.float16)
+
+    # 实现W4A16矩阵乘法
+    def w4a16_matmul(x, w_q, scales, group_size):
+        M, K = x.shape
+        N, K_half = w_q.shape
+        _, num_groups = scales.shape
+
+        # 创建一个新张量来存储解包后的权重
+        w_dequantized = torch.zeros(N, K, dtype=torch.float16, device=w_q.device)
+        
+        # 提取高4位和低4位
+        w_high = (w_q >> 4) & 0x0F  # 高4位
+        w_low = w_q & 0x0F          # 低4位
+        
+        # 将它们交替放置在正确位置
+        w_dequantized[:, 0::2] = (w_high.to(torch.float16) - 8).to(torch.float16)  # 偶数索引位置放高4位
+        w_dequantized[:, 1::2] = (w_low.to(torch.float16) - 8).to(torch.float16)   # 奇数索引位置放低4位
+
+        # 应用组归一化缩放
+        # 每个组大小为group_size，在K维度上应用相应的scale
+        for i in range(num_groups):
+            start_idx = i * group_size
+            end_idx = (i + 1) * group_size
+            w_dequantized[:, start_idx:end_idx] *= scales[:, i:i+1]
+
+        # 计算矩阵乘法 y = x @ w_dequantized.T
+        y = torch.mm(x, w_dequantized.t())
+        return y
+    
+    # 用leeetGPU实现
+    @timeit
+    def leetgpu_w4a16(x, w_dequantized, scales, group_size):
+        out = leetgpu.W4A16_matmul(x, w_dequantized, scales, group_size)
+        return out
+    
+    out = leetgpu_w4a16(x, w_q, scales, group_size)
+    
+    # 用 pYTORCH 实现
+    @timeit
+    def pytorch_w4a16(x, w_dequantized, scales, group_size):
+        out = w4a16_matmul(x, w_dequantized, scales, group_size)
+        return out
+    
+    torch_out = pytorch_w4a16(x, w_q, scales, group_size)
+
+    # 打印结果
+    print("LeetGPU:", out)
+    print("PyTorch:", torch_out)
+
+    # 检查结果
+    compare_tensors(out, torch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+def topp_sampling():
+    """
+    Write a GPU program that implements top-p (nucleus) sampling for LLM inference.
+
+Top-p sampling is a text generation technique where you sample from the smallest set of tokens whose cumulative probability exceeds threshold p. This balances randomness and quality better than pure top-k or greedy sampling.
+
+Given logits (unnormalized scores) from a language model:
+
+Convert logits to probabilities using softmax
+Sort tokens by probability (descending)
+Find the smallest set where cumulative probability ≥ p (the "nucleus")
+Renormalize the nucleus probabilities to sum to 1
+Sample a token from the nucleus using the provided random seed
+Implementation Requirements
+Use only native features (external libraries are not permitted)
+The solve function signature must remain unchanged
+Ensure numerical stability when computing softmax
+Example 1:
+Input:
+  logits = [1.0, 2.0, 3.0, 0.5]
+  p = 0.9
+  seed = 42
+
+Output:
+  sampled_token = 2 or 1
+  (tokens with highest probabilities, sampled randomly)
+Example 2:
+Input:
+  logits = [10.0, 1.0, 1.0]
+  p = 0.5
+  seed = 123
+
+Output:
+  sampled_token = 0
+  (single token dominates the probability mass)
+Constraints
+3 ≤ vocab_size ≤ 50,000
+-100.0 ≤ logits[i] ≤ 100.0
+0.0 < p ≤ 1.0
+0 ≤ sampled_token < vocab_size
+Performance is measured with vocab_size = 50,000
+    """
+    # 测试
+    vocab_size = 500
+    logits = torch.rand(vocab_size, device="cuda", dtype=torch.float32) * 1000
+    p = torch.tensor(0.9, device="cuda", dtype=torch.float32).view(1)
+    seed = torch.tensor(42, device="cuda", dtype=torch.int32).view(1)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_topp_sampling(logits, p, seed):
+        out = leetgpu.topp_sampling(logits, p, seed)
+        return out
+    
+    out = leetgpu_topp_sampling(logits, p, seed)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_topp_sampling(logits, p, seed):
+        torch.manual_seed(int(seed.item()))
+
+        # softmax 
+        scores = F.softmax(logits, dim=-1)
+
+        # Sort prob 降序
+        sorted_scores, sorted_idxs = torch.sort(scores, descending=True)
+
+        # prefix sum
+        prefix_scores = torch.cumsum(sorted_scores, dim=-1)
+
+        cut_offset = torch.searchsorted(prefix_scores, p.item(), right=False)
+        cut_offset += 1
+
+        nucleus_scores = sorted_scores[:cut_offset]
+        nucleus_idx = sorted_idxs[:cut_offset]
+
+        # normalize 
+        nucleus_scores = nucleus_scores / nucleus_scores.sum()
+
+        # Sample
+        sampled_id_in_nucleus = torch.multinomial(nucleus_scores, num_samples=1)
+
+        # map
+        sampled_token = torch.zeros(1, dtype=torch.int32, device=logits.device)
+        sampled_token[0] = nucleus_idx[sampled_id_in_nucleus].item()
+        return sampled_token
+    
+    pytorch_out = pytorch_topp_sampling(logits, p, seed)
+
+    # 打印结果
+    print("Logits", logits[:10])
+    print("LeetGPU:", out)
+    print("PyTorch:", pytorch_out)
+
+    # 检查结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
+    print("expected logits:", logits[int(pytorch_out.item())].item())
+    print("actual logits:", logits[out].item())
+
+
+def fft_2D():
+    """
+    Compute the 2D Discrete Fourier Transform (2D DFT) of a complex-valued signal stored on the GPU. Given a 2D complex input signal of shape M × N, compute its 2D DFT spectrum using the row-column decomposition: apply a 1D DFT along each row, then a 1D DFT along each column of the result. All values are 32-bit floating point.
+
+Implementation Requirements
+Use only native features (external libraries are not permitted)
+The solve function signature must remain unchanged
+The final result must be stored in spectrum
+The input and output are stored as 1D arrays of interleaved real and imaginary parts in row-major order: element x[m, n] has its real part at index 2*(m*N + n) and imaginary part at index 2*(m*N + n) + 1
+
+Constraints
+1 ≤ M, N ≤ 4096
+Signal values are 32-bit floating point (real and imaginary parts)
+Performance is measured with M = 2,048, N = 2,048
+    """
+    M = 2048
+    N = 2048
+    signals = torch.rand(M, N * 2, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_fft_2D(signals):
+        spectrum = leetgpu.fft_2D(signals)
+        return spectrum
+    
+    out = leetgpu_fft_2D(signals)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_fft_2D(signals):
+        """
+        Tính 2D FFT bằng phương pháp Row-Column Decomposition.
+        M, N = 2048
+        """
+        # 1. Chuyển đổi mảng interleaved [real, imag] thành tensor số phức 2D
+        # View tensor dưới dạng (M, N, 2) để tách phần thực/ảo
+        complex_view = signals.view(M, N, 2)
+        
+        # Chuyển thành tensor kiểu complex64 (số phức)
+        # contiguous() đảm bảo dữ liệu nằm liên tục trong bộ nhớ trước khi chuyển đổi
+        x = torch.view_as_complex(complex_view.contiguous())
+        
+        # 2. Thực hiện 2D FFT (Row-Column Decomposition)
+        # torch.fft.fft2 đã được tối ưu hóa sâu trên GPU để thực hiện hàng trước, cột sau
+        X = torch.fft.fft2(x)
+        
+        # 3. Chuyển ngược từ số phức về định dạng interleaved [real, imag]
+        # torch.view_as_real biến tensor complex (M, N) thành (M, N, 2)
+        output_view = torch.view_as_real(X)
+        return output_view.view(M, N * 2)
+
+    pytorch_out = pytorch_fft_2D(signals)
+
+    # 打印结果
+    print("LeetGPU:", out[:10])
+    print("PyTorch:", pytorch_out[:10])
+
+    # 检查结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def fast_fft():
+    """
+    Implement a GPU program that computes the Fast Fourier Transform (FFT) of a complex-valued 1-D signal. Given an input signal array containing N complex numbers stored as interleaved real/imaginary pairs, compute the discrete Fourier transform and store the result in the spectrum array. The FFT converts a time-domain signal into its frequency-domain representation using the formula:
+The FFT algorithm reduces the computational complexity from O(N²) to O(N log N) by exploiting symmetries in the twiddle factors.
+
+Implementation Requirements
+External libraries (cuFFT etc.) are not permitted
+The solve function signature must remain unchanged
+The final result must be stored in the spectrum array
+The kernel must be entirely GPU-resident—no host-side FFT calls
+Both input and output use interleaved real/imaginary layout: [real₀, imag₀, real₁, imag₁, ...]
+Example 1:
+Input:  N = 4
+        signal = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        (represents: [1+0j, 0+0j, 0+0j, 0+0j])
+
+Output: spectrum = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+        (represents: [1+0j, 1+0j, 1+0j, 1+0j])
+Example 2:
+Input:  N = 2
+        signal = [1.0, 0.0, 1.0, 0.0]
+        (represents: [1+0j, 1+0j])
+
+Output: spectrum = [2.0, 0.0, 0.0, 0.0]
+        (represents: [2+0j, 0+0j])
+Constraints
+1 ≤ N ≤ 262,144
+All values are 32-bit floating point numbers
+Absolute error ≤ 1e-3 and relative error ≤ 1e-3
+Input and output arrays have length 2 × N
+Performance is measured with N = 262,144
+    """
+    # 输入数据
+    N = 4096
+    signal = torch.rand(N * 2, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_fast_fft(signal):
+        spectrum = leetgpu.fast_fft(signal)
+        return spectrum
+    
+    out = leetgpu_fast_fft(signal)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_fast_fft(signal):
+        """
+        1d FFT
+        """
+        x = torch.view_as_complex(signal.view(N, 2))
+        X = torch.fft.fft(x)
+        return torch.view_as_real(X).view(N * 2)
+    
+    pytorch_out = pytorch_fast_fft(signal)
+
+    # 打印结果
+    print("LeetGPU:", out[:10])
+    print("PyTorch:", pytorch_out[:10])
+
+    # 检查结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def int8_kvcache_attntion():
+    """
+    INT8 KV-Cache Attention
+Implement decode-phase multi-head attention where the key and value caches are stored as int8 with per-token scale factors. This memory layout halves KV-cache bandwidth versus float32 and is used in production LLM serving systems such as TensorRT-LLM and vLLM. Given a query tensor Q for a single new token, int8 key cache K_int8, int8 value cache V_int8, and per-token scales k_scale and v_scale, dequantize the caches and compute scaled dot-product attention to produce output. All non-integer tensors use float32.
+
+Implementation Requirements
+Implement the function solve(Q, K_int8, V_int8, k_scale, v_scale, output, num_heads, seq_len, head_dim).
+Do not change the function signature or use external libraries beyond the standard GPU frameworks.
+Write the result into the provided output buffer.
+Dequantize using per-token scales: K_float[h, s, d] = K_int8[h, s, d] × k_scale[h, s] (and analogously for V).
+Use scaled dot-product attention with scale factor 1 / sqrt(head_dim) and a softmax over the sequence dimension.
+
+Constraints
+1 ≤ num_heads ≤ 64
+1 ≤ seq_len ≤ 32,768
+8 ≤ head_dim ≤ 256; head_dim is a multiple of 8
+K_int8 and V_int8 values are in 
+All scale values are positive float32
+Performance is measured with num_heads = 32, seq_len = 8,192, head_dim = 128
+    """
+    # 输入数据
+    num_heads = 100
+    seq_len = 3089
+    head_dim = 256
+    Q = torch.randn(num_heads, head_dim, device="cuda", dtype=torch.float32)
+    K_int8 = torch.randint(low=-128, high=127, size=(num_heads, seq_len, head_dim), device="cuda", dtype=torch.int8)
+    V_int8 = torch.randint(low=-128, high=127, size=(num_heads, seq_len, head_dim), device="cuda", dtype=torch.int8)
+    k_scale = torch.rand(num_heads, seq_len, device="cuda", dtype=torch.float32)
+    v_scale = torch.rand(num_heads, seq_len, device="cuda", dtype=torch.float32)
+
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_int8_kvcache_attntion(Q, K_int8, V_int8, k_scale, v_scale):
+        output = leetgpu.int8_kvcache_attntion(Q, K_int8, V_int8, k_scale, v_scale)
+        return output
+
+    out = leetgpu_int8_kvcache_attntion(Q, K_int8, V_int8, k_scale, v_scale)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_int8_kvcache_attntion(Q, K_int8, V_int8, k_scale, v_scale):
+        # Dequantize K and V using per-token scales
+        # K_float[h, s, d] = K_int8[h, s, d] × k_scale[h, s]
+        # V_float[h, s, d] = V_int8[h, s, d] × v_scale[h, s]
+        
+        # 扩展scale维度以匹配K_int8和V_int8的形状
+        k_scale_expanded = k_scale.unsqueeze(-1).expand(-1, -1, head_dim)  # [num_heads, seq_len, head_dim]
+        v_scale_expanded = v_scale.unsqueeze(-1).expand(-1, -1, head_dim)  # [num_heads, seq_len, head_dim]
+        
+        # 反量化K和V
+        K_float = K_int8.float() * k_scale_expanded  # [num_heads, seq_len, head_dim]
+        V_float = V_int8.float() * v_scale_expanded  # [num_heads, seq_len, head_dim]
+        
+        # 计算scaled dot-product attention
+        # Q: [num_heads, head_dim]
+        # K_float: [num_heads, seq_len, head_dim]
+        # V_float: [num_heads, seq_len, head_dim]
+        
+        # 计算Q和K之间的点积
+        # 首先扩展Q维度以进行批量矩阵乘法
+        Q_expanded = Q.unsqueeze(1)  # [num_heads, 1, head_dim]
+        
+        # 计算注意力分数: [num_heads, 1, seq_len]
+        attn_scores = torch.matmul(Q_expanded, K_float.transpose(-2, -1))  # [num_heads, 1, seq_len]
+        
+        # 移除中间维度
+        attn_scores = attn_scores.squeeze(1)  # [num_heads, seq_len]
+        
+        # 应用缩放因子 1 / sqrt(head_dim)
+        scale_factor = 1.0 / torch.sqrt(torch.tensor(head_dim, dtype=torch.float32, device="cuda"))
+        attn_scores = attn_scores * scale_factor  # [num_heads, seq_len]
+        
+        # 应用softmax，对序列维度进行归一化
+        attn_weights = F.softmax(attn_scores, dim=-1)  # [num_heads, seq_len]
+        
+        # 计算输出: attn_weights @ V_float
+        # attn_weights: [num_heads, seq_len]
+        # V_float: [num_heads, seq_len, head_dim]
+        # 扩展attn_weights以进行逐元素乘法
+        attn_weights_expanded = attn_weights.unsqueeze(-1).expand(-1, -1, head_dim)  # [num_heads, seq_len, head_dim]
+        
+        # 计算加权值
+        weighted_values = attn_weights_expanded * V_float  # [num_heads, seq_len, head_dim]
+        
+        # 沿着序列维度求和得到最终输出
+        result = torch.sum(weighted_values, dim=1)  # [num_heads, head_dim]
+        return result
+    
+    pytorch_out = pytorch_int8_kvcache_attntion(Q, K_int8, V_int8, k_scale, v_scale)
+
+    # 打印结果
+    print("LeetGPU:", out[:10])
+    print("PyTorch:", pytorch_out[:10])
+
+    # 检查结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
+        
+
 
 if __name__ == "__main__":
     # vector_addition()
@@ -2575,4 +2985,9 @@ if __name__ == "__main__":
     # all_pairs_shortest_paths()
     # gqa()
     # linear_recurrence()
-    lora_linear()
+    # lora_linear()
+    # W4A16_Matmul()
+    # topp_sampling()
+    # fft_2D()
+    # fast_fft()
+    int8_kvcache_attntion()

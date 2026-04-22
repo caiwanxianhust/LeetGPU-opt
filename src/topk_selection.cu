@@ -38,18 +38,29 @@ All values in input are 32-bit floats
 
 
 
+// __device__ __forceinline__ void inset_to_min_heap(float *heap, float val, int k) {
+//     if (val > heap[k - 1]) {
+//         heap[k - 1] = val;
+//         for (int i = k - 1; i > 0; i--) {
+//             if (heap[i] > heap[i - 1]) {
+//                 float temp = heap[i];
+//                 heap[i] = heap[i - 1];
+//                 heap[i - 1] = temp;
+//             }
+//         }
+//     }
+// }
+
 __device__ __forceinline__ void inset_to_min_heap(float *heap, float val, int k) {
-    if (val > heap[k - 1]) {
-        heap[k - 1] = val;
-        for (int i = k - 1; i > 0; i--) {
-            if (heap[i] > heap[i - 1]) {
-                float temp = heap[i];
-                heap[i] = heap[i - 1];
-                heap[i - 1] = temp;
-            }
-        }
+    if (val < heap[k - 1]) return;
+    int i = k - 2;
+    while (i >= 0 && heap[i] < val) {
+        heap[i + 1] = heap[i];
+        i--;
     }
+    heap[i + 1] = val;
 }
+
 
 __device__ __forceinline__ void combine_min_heaps(float *heap1, float *heap2, int k) {
     for (int i = 0; i < k; i++) {

@@ -278,6 +278,33 @@ void lora_linear_cuda(
 ); 
 
 
+void int4_weight_only_quantized_matMul_cuda(
+    const __half* x, const uint8_t* w_q, const __half* scales, __half* y, int M,
+    int N, int K, int group_size
+);
+
+void topp_sampling_cuda(
+    const float* logits, const float* p, const int* seed, int* sampled_token, int vocab_size
+); 
+
+
+void fft_2D_cuda(
+    const float* signal, float* spectrum, int M, int N
+); 
+
+
+void fast_fft_cuda(
+    const float* signal, float* spectrum, int N
+);
+
+
+void int8_kvcache_attntion_cuda(
+    const float* Q, const int8_t* K_int8, const int8_t* V_int8,
+    const float* k_scale, const float* v_scale, float* output, 
+    int num_heads, int seq_len, int head_dim
+); 
+
+
 
 
 // -------------------------- Python 绑定函数 --------------------------
@@ -1863,8 +1890,121 @@ torch::Tensor lora_linear(
 }
 
 
+torch::Tensor int4_weight_only_quantized_matMul(
+    const torch::Tensor& x,
+    const torch::Tensor& w_q,
+    const torch::Tensor& scales,
+    const int group_size
+) {
+    int M = x.size(0);
+    int K = x.size(1);
+    int N = w_q.size(0);
+    torch::Tensor output = torch::empty({M, N}, x.options());
+
+    int4_weight_only_quantized_matMul_cuda(
+        reinterpret_cast<const half*>(x.data_ptr<at::Half>()),
+        w_q.data_ptr<uint8_t>(),
+        reinterpret_cast<const half*>(scales.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(output.data_ptr<at::Half>()),
+        M, N, K, group_size
+    );
+    return output;
+}
 
 
+torch::Tensor topp_sampling(
+    const torch::Tensor& logits,
+    const torch::Tensor& p,
+    const torch::Tensor& seed
+) {
+    TORCH_CHECK(logits.ndimension() == 1, "logits must be 1D");
+    TORCH_CHECK(p.ndimension() == 1, "p must be 1D");
+    TORCH_CHECK(seed.ndimension() == 1, "seed must be 1D");
+    TORCH_CHECK(logits.device().is_cuda(), "logits must be on CUDA");
+    TORCH_CHECK(p.device().is_cuda(), "p must be on CUDA");
+    TORCH_CHECK(seed.device().is_cuda(), "seed must be on CUDA");
+    int vocab_size = logits.size(0);
+
+    torch::Tensor sampled_token = torch::zeros({1}, seed.options());
+    topp_sampling_cuda(
+        logits.data_ptr<float>(), 
+        p.data_ptr<float>(), 
+        seed.data_ptr<int>(), 
+        sampled_token.data_ptr<int>(), 
+        vocab_size);
+    return sampled_token;
+}
+
+
+torch::Tensor fft_2D(
+    const torch::Tensor& input
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+
+    int rows = input.size(0);
+    int cols = input.size(1);
+    torch::Tensor output = torch::empty_like(input);
+    fft_2D_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        rows, (cols / 2)
+    );
+    return output;
+}
+
+
+torch::Tensor fast_fft(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(input.size(0) % 2 == 0, "Input size must be even");
+
+    int N = input.size(0) / 2;
+    torch::Tensor output = torch::empty_like(input);
+    fast_fft_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
+}
+
+
+torch::Tensor int8_kvcache_attntion(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    const torch::Tensor& k_scale,
+    const torch::Tensor& v_scale
+) {
+    TORCH_CHECK(Q.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(K.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(V.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(k_scale.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(v_scale.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(Q.device().is_cuda() && K.device().is_cuda() && V.device().is_cuda() && k_scale.device().is_cuda() && v_scale.device().is_cuda(), 
+        "Input must be on CUDA");
+    
+    int num_heads = Q.size(0);
+    int head_dim = Q.size(1);
+    int seq_len = K.size(1);
+    
+    torch::Tensor output = torch::zeros_like(Q);
+    int8_kvcache_attntion_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<int8_t>(),
+        V.data_ptr<int8_t>(),
+        k_scale.data_ptr<float>(),
+        v_scale.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_heads, seq_len, head_dim
+    );
+    return output;
+}
 
 
 
@@ -1933,4 +2073,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gqa", &gqa, "GQA (CUDA)");
     m.def("linear_recurrence", &linear_recurrence, "Linear Recurrence (CUDA)");
     m.def("lora_linear", &lora_linear, "LoRA Linear (CUDA)");
+    m.def("W4A16_matmul", &int4_weight_only_quantized_matMul, "W4A16_matmul (CUDA)");
+    m.def("topp_sampling", &topp_sampling, "Top-P Sampling (CUDA)");
+    m.def("fft_2D", &fft_2D, "FFT 2D (CUDA)");
+    m.def("fast_fft", &fast_fft, "Fast FFT (CUDA)");
+    m.def("int8_kvcache_attntion", &int8_kvcache_attntion, "Int8 KV Cache Attention (CUDA)");
 }
