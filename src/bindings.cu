@@ -304,6 +304,29 @@ void int8_kvcache_attntion_cuda(
     int num_heads, int seq_len, int head_dim
 ); 
 
+void swiglu_mlp_block_cuda(
+    const float* x, const float* W_gate, const float* W_up, const float* W_down,
+    float* output, int M, int d_model, int d_ffn
+);
+
+void causal_depthwise_conv1D_cuda(
+    const float* x, const float* weight, const float* bias, float* output, int B,
+    int L, int D, int K
+); 
+
+void llama_transformer_block_cuda(
+    const float* x, float* output, const float* weights, const float* cos,
+    const float* sin, int seq_len
+); 
+
+
+void ssm_selective_scan_cuda(
+    const float* u, const float* delta, const float* A, const float* B,
+    const float* C, const float* skip, float* y, int batch, int seq_len,
+    int d_model, int d_state
+); 
+
+
 
 
 
@@ -2006,6 +2029,136 @@ torch::Tensor int8_kvcache_attntion(
     return output;
 }
 
+torch::Tensor swiglu_mlp_block(
+    const torch::Tensor& x,
+    const torch::Tensor& W_gate,
+    const torch::Tensor& W_up,
+    const torch::Tensor& W_down
+) {
+    TORCH_CHECK(x.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(W_gate.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(W_up.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(W_down.ndimension() == 2, "Input must be 2D");
+    // 校验 d_model
+    TORCH_CHECK(x.size(1) == W_gate.size(0) && x.size(1) == W_up.size(0) && x.size(1) == W_down.size(1), 
+        "The ndimension of d_model must match");
+    // 校验 d_ffn
+    TORCH_CHECK(W_up.size(1) == W_gate.size(1) && W_gate.size(1) == W_down.size(0), 
+        "The ndimension of d_ffn must match");
+    int M = x.size(0);
+    int d_model = x.size(1);
+    int d_ffn = W_gate.size(1);
+
+    // torch::Tensor output = torch::zeros_like(x);
+    torch::Tensor output = torch::zeros({M, d_model}, x.options());
+    swiglu_mlp_block_cuda(
+        x.data_ptr<float>(),
+        W_gate.data_ptr<float>(),
+        W_up.data_ptr<float>(),
+        W_down.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, d_model, d_ffn
+    );
+
+    return output;
+}
+
+
+torch::Tensor causal_depthwise_conv1D(
+    const torch::Tensor& x,
+    const torch::Tensor& weight,
+    const torch::Tensor& bias
+) {
+    TORCH_CHECK(x.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(weight.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(bias.ndimension() == 1, "Input must be 1D");
+
+    // 校验 D
+    TORCH_CHECK(x.size(2) == weight.size(0) && x.size(2) == bias.size(0), "The ndimension of d_ffn must match");
+
+    int B = x.size(0);
+    int L = x.size(1);
+    int D = x.size(2);
+    int K = weight.size(1);
+
+    torch::Tensor output = torch::zeros_like(x);
+
+    causal_depthwise_conv1D_cuda(
+        x.data_ptr<float>(),
+        weight.data_ptr<float>(),
+        bias.data_ptr<float>(),
+        output.data_ptr<float>(),
+        B, L, D, K
+    );
+
+    return output;
+}
+
+
+torch::Tensor llama_transformer_block(
+    const torch::Tensor& x,
+    const torch::Tensor& weights,
+    const torch::Tensor& cos,
+    const torch::Tensor& sin
+) {
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(weights.ndimension() == 1, "weights must be 1D");
+
+    int seq_len = x.size(0);
+    int d_model = x.size(1);
+    torch::Tensor output = torch::empty({seq_len, d_model}, x.options());
+    llama_transformer_block_cuda(
+        x.data_ptr<float>(),
+        output.data_ptr<float>(),
+        weights.data_ptr<float>(),
+        cos.data_ptr<float>(),
+        sin.data_ptr<float>(),
+        seq_len
+    );
+    return output;
+}
+
+
+torch::Tensor ssm_selective_scan(
+    const torch::Tensor& u,
+    const torch::Tensor& delta,
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    const torch::Tensor& C,
+    const torch::Tensor& skip
+) {
+    TORCH_CHECK(u.ndimension() == 3, "u must be 3D");
+    TORCH_CHECK(delta.ndimension() == 3, "delta must be 3D");
+    TORCH_CHECK(A.ndimension() == 2, "A must be 2D");
+    TORCH_CHECK(B.ndimension() == 3, "B must be 3D");
+    TORCH_CHECK(C.ndimension() == 3, "C must be 3D");
+    TORCH_CHECK(skip.ndimension() == 1, "skip must be 1D");
+
+    int batch = u.size(0);
+    int seq_len = u.size(1);
+    int d_model = u.size(2);
+    int d_state = A.size(1);
+
+    TORCH_CHECK(delta.size(0) == batch && delta.size(1) == seq_len && delta.size(2) == d_model, "delta must have the same shape as u");
+    TORCH_CHECK(A.size(0) == d_model, "A must have shape (d_model, d_state)");
+    TORCH_CHECK(B.size(0) == batch && B.size(1) == seq_len && B.size(2) == d_state, "B must have shape (batch, seq_len, d_state)");
+    TORCH_CHECK(C.size(0) == batch && C.size(1) == seq_len && C.size(2) == d_state, "C must have shape (batch, seq_len, d_state)");
+    TORCH_CHECK(skip.size(0) == d_model, "skip must have shape (d_model)");
+
+    torch::Tensor output = torch::empty_like(u);
+    ssm_selective_scan_cuda(
+        u.data_ptr<float>(),
+        delta.data_ptr<float>(),
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        skip.data_ptr<float>(),
+        output.data_ptr<float>(),
+        batch, seq_len, d_model, d_state
+    );
+    return output;
+}
+
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -2078,4 +2231,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fft_2D", &fft_2D, "FFT 2D (CUDA)");
     m.def("fast_fft", &fast_fft, "Fast FFT (CUDA)");
     m.def("int8_kvcache_attntion", &int8_kvcache_attntion, "Int8 KV Cache Attention (CUDA)");
+    m.def("swiglu_mlp_block", &swiglu_mlp_block, "SwiGLU MLP Block (CUDA)");
+    m.def("causal_depthwise_conv1D", &causal_depthwise_conv1D, "Causal Depthwise Conv1d (CUDA)");
+    m.def("llama_transformer_block", &llama_transformer_block, "Llama Transformer Block (CUDA)");
+    m.def("ssm_selective_scan", &ssm_selective_scan, "SSM Selective Scan (CUDA)");
 }

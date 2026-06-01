@@ -2920,6 +2920,385 @@ Performance is measured with num_heads = 32, seq_len = 8,192, head_dim = 128
     compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
         
 
+def swiglu_mlp_block():
+    """
+    Implement the SwiGLU MLP block — the feedforward network used in LLaMA, Mistral, Gemma, and most modern large language models. Given an input matrix x of shape [M, d_model] and three weight matrices W_gate, W_up (each [d_model, d_ffn]), and W_down ([d_ffn, d_model]), compute: output = (SiLU(x × W_gate) ⊙ (x × W_up)) × W_down, where SiLU(z) = z × sigmoid(z) and ⊙ denotes element-wise multiplication. All tensors are float32.
+
+Constraints
+1 ≤ M ≤ 65,536
+1 ≤ d_model ≤ 8,192
+1 ≤ d_ffn ≤ 32,768
+All tensors are float32 on the GPU.
+Input values are in the range [-10, 10].
+Performance is measured with M = 512, d_model = 4,096, d_ffn = 14,336
+    """
+
+    # 输入数据
+    M = 1500
+    d_model = 2999
+    d_ffn = 2003
+
+    x = torch.randn(M, d_model, device="cuda", dtype=torch.float32)
+    W_gate = torch.randn(d_model, d_ffn, device="cuda", dtype=torch.float32)
+    W_up = torch.randn(d_model, d_ffn, device="cuda", dtype=torch.float32)
+    W_down = torch.randn(d_ffn, d_model, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_swiglu_mlp_block(x, W_gate, W_up, W_down):
+        output = leetgpu.swiglu_mlp_block(x, W_gate, W_up, W_down)
+        return output
+    
+    out = leetgpu_swiglu_mlp_block(x, W_gate, W_up, W_down)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_swiglu_mlp_block(x, W_gate, W_up, W_down):
+        xg = torch.matmul(x, W_gate)
+
+        # 计算SiLU激活函数
+        silu = torch.sigmoid(xg) * xg
+        
+        # 计算W_gate和W_up的乘积
+        gate_up = silu * torch.matmul(x, W_up)
+
+        # 乘以W_down
+        output = torch.matmul(gate_up, W_down)
+        return output
+    
+    pytorch_out = pytorch_swiglu_mlp_block(x, W_gate, W_up, W_down)
+
+    # 打印结果
+    print("LeetGPU:", out.shape, out[:5, :5])
+    print("PyTorch:", pytorch_out.shape, pytorch_out[:5, :5])
+
+    # 检查结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def causal_depthwise_conv1D():
+    """
+    /*
+Implement a causal depthwise 1D convolution over a batched sequence tensor x of shape (B, L, D), producing an output of the same shape. In a depthwise convolution, each channel d is convolved independently using its own kernel weight[d, :] — there is no mixing across channels. The convolution is causal: output position l may only depend on input positions 0, 1, …, l (past and present), never future positions. This operation is a key component of state-space models such as Mamba, where it is applied before the selective scan to mix local context within each feature channel.
+
+where positions l − k < 0 are treated as zero (zero-pad the left boundary). The tensor layout is channels-last: x[b, l, d] is stored at offset b × L × D + l × D + d.
+
+Implementation Requirements
+The solve function signature must remain unchanged
+The result must be written into the output tensor
+Use only native features (external libraries are not permitted)
+Input positions before the start of the sequence (i.e. indices l − k < 0) must be treated as zero
+Example
+With B = 1, L = 4, D = 2, K = 3:
+
+x      = [[[1.0, 2.0],    # l=0
+           [3.0, 4.0],    # l=1
+           [5.0, 6.0],    # l=2
+           [7.0, 8.0]]]   # l=3   shape (1, 4, 2)
+
+weight = [[ 1.0,  0.0, -1.0],   # channel d=0
+          [ 1.0,  1.0,  1.0]]   # channel d=1   shape (2, 3)
+
+bias   = [0.0, 0.0]
+
+output = [[[1.0,  2.0],   # l=0: d0: 1*1=1          d1: 1*2=2
+           [3.0,  6.0],   # l=1: d0: 3*1+1*0=3      d1: 4*1+2*1=6
+           [4.0, 12.0],   # l=2: d0: 5*1+3*0+1*(-1)=4  d1: 6+4+2=12
+           [4.0, 18.0]]]  # l=3: d0: 7*1+5*0+3*(-1)=4  d1: 8+6+4=18
+Constraints
+1 ≤ B ≤ 16 (batch size)
+1 ≤ L ≤ 8,192 (sequence length)
+1 ≤ D ≤ 8,192 (number of channels)
+1 ≤ K ≤ 8 (kernel size; typically 3 or 4 in practice)
+All tensors use 32-bit floating point
+Tensor x and output use channels-last layout: shape (B, L, D)
+Performance is measured with B = 8, L = 2,048, D = 4,096, K = 4
+*/
+    """
+    # 输入数据
+    B = 8
+    L = 256
+    D = 64
+    K = 4
+    x = torch.randn(B, L, D, device="cuda", dtype=torch.float32)
+    weight = torch.randn(D, K, device="cuda", dtype=torch.float32)
+    bias = torch.randn(D, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_causal_depthwise_conv1D(x, weight, bias):
+        output = leetgpu.causal_depthwise_conv1D(x, weight, bias)
+        return output
+    
+    out = leetgpu_causal_depthwise_conv1D(x, weight, bias)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_causal_depthwise_conv1D_optimized(x, weight, bias):
+        B, L, D = x.shape
+        K = weight.shape[1]
+        
+        # 1. 转成channels-first格式 (B, D, L)，符合conv1d的输入要求
+        x_cf = x.permute(0, 2, 1)  # (B, L, D) → (B, D, L)
+        
+        # 2. 反转weight的顺序（因为conv1d是互相关，需要对齐公式的k顺序）
+        # 公式中weight[d, 0]对应当前位置l，conv1d中kernel的最右侧元素对应当前位置
+        weight_reversed = weight.flip(1)  # (D, K) → (D, K)，反转k维度
+        
+        # 3. 深度卷积：groups=D，每个通道单独卷积；padding=K-1实现因果卷积
+        # 输出长度为 L + 2*(K-1) - K + 1 = L + K -1
+        out_cf = F.conv1d(
+            x_cf,
+            weight_reversed.unsqueeze(1),  # (D, 1, K)，conv1d weight格式为(C_out, C_in/groups, K)
+            bias,
+            stride=1,
+            padding=K-1,
+            groups=D  # 深度卷积，每个通道独立卷积
+        )
+        
+        # 4. 取前L个位置（因果卷积的有效输出），并转成channels-last格式
+        out = out_cf[..., :L].permute(0, 2, 1)  # (B, D, L) → (B, L, D)
+        return out
+    
+    pytorch_out = pytorch_causal_depthwise_conv1D_optimized(x, weight, bias)
+
+    # 打印结果
+    print("LeetGPU:", out.shape, out[1, :5, :5])
+    print("PyTorch:", pytorch_out.shape, pytorch_out[1, :5, :5])
+
+    # 检查结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
+
+
+def llama_transformer_block():
+    """
+    Implement a single Llama-style transformer decoder block. Given an input tensor of shape (seq_len, 512), a packed weight buffer, and precomputed RoPE tables, compute the output using pre-norm architecture with Grouped Query Attention (GQA), Rotary Position Embeddings (RoPE), and a SwiGLU feed-forward network.
+    
+    The block follows Llama's pre-norm architecture. Unlike GPT-2, it uses RMSNorm (no mean subtraction, no additive bias), Grouped Query Attention with 8 query heads and 2 key/value heads, Rotary Position Embeddings applied to Q and K, and a SwiGLU feed-forward network. None of the linear projections have bias terms.
+
+    Implementation Requirements
+Use only native features (external libraries are not permitted)
+The solve function signature must remain unchanged
+The final result must be stored in the output tensor
+RMSNorm uses 
+, no additive bias
+Apply causal masking: position 
+ attends only to positions 
+Repeat K and V heads 
+ (GQA groups) before computing attention
+cos and sin have shape (seq_len, 32) — apply them to both Q and K heads independently
+
+All parameters are packed into a single contiguous weights buffer (2,819,072 floats) in the order below. All 2-D matrices are stored row-major with shape (out_dim, in_dim). There are no bias terms.
+
+Parameter	Shape	Size	Offset
+ (RMSNorm 1 scale)	(512,)	512	0
+(512, 512)	262,144	512
+(128, 512)	65,536	262,656
+(128, 512)	65,536	328,192
+(512, 512)	262,144	393,728
+ (RMSNorm 2 scale)	(512,)	512	655,872
+(1408, 512)	720,896	656,384
+(1408, 512)	720,896	1,377,280
+(512, 1408)	720,896	2,098,176
+Example
+With seq_len = 4, x drawn uniformly from [−1, 1], and randomly initialized weights:
+
+Input:  x.shape       = (4, 512)       # 4 token hidden states
+        weights.shape = (2,819,072,)   # packed weight buffer
+        cos.shape     = (4, 32)        # precomputed RoPE cosines
+        sin.shape     = (4, 32)        # precomputed RoPE sines
+        seq_len       = 4
+Output: output.shape  = (4, 512)       # transformed token hidden states
+Constraints
+d_model = 512, n_q_heads = 8, n_kv_heads = 2, head_dim = 64, ffn_hidden = 1,408
+1 ≤ seq_len ≤ 4,096
+All tensors use 32-bit floating point
+Performance is measured with seq_len = 2,048
+    """
+
+    # 输入数据
+    d_model = 512
+    seq_len = 1000
+    num_q_heads = 8
+    num_kv_heads = 2
+    head_dim = 64
+    ffn_hidden = 1408
+    x = torch.randn(seq_len, d_model, device="cuda", dtype=torch.float32)
+    weights = torch.randn(2819072, device="cuda", dtype=torch.float32)
+    cos = torch.randn(seq_len, 32, device="cuda", dtype=torch.float32)
+    sin = torch.randn(seq_len, 32, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_llama_transformer_block(x, weights, cos, sin):
+        output = leetgpu.llama_transformer_block(x, weights, cos, sin)
+        return output
+
+    out = leetgpu_llama_transformer_block(x, weights, cos, sin)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_llama_transformer_block(x, weights, cos, sin):
+        rms_scale_1 = weights[:512]
+        w_q = weights[512:262656].view(512, 512)
+        w_k = weights[262656:328192].view(128, 512)
+        w_v = weights[328192:393728].view(128, 512)
+        w_o = weights[393728:655872].view(512, 512)
+        rms_scale_2 = weights[655872:656384]
+        w_gate = weights[656384:1377280].view(1408, 512)
+        w_up = weights[1377280:2098176].view(1408, 512)
+        w_down = weights[2098176:].view(512, 1408)
+
+        #  RMS Norm
+        def rms_norm_functional(
+            x: torch.Tensor, 
+            weight: torch.Tensor, 
+            eps: float = 1e-5
+        ) -> torch.Tensor:
+            """
+            纯函数版RMSNorm，完全对应公式
+            Args:
+                x: 输入张量，形状 [..., d]（最后一维是特征维度）
+                weight: 缩放权重，形状 [d]
+                eps: 数值稳定常数
+            Returns:
+                归一化后的张量，形状和x一致
+            """
+            # 计算均方根倒数
+            mean_sq = x.pow(2).mean(dim=-1, keepdim=True)
+            inv_rms = torch.rsqrt(mean_sq + eps)
+            # 归一化 + 乘权重
+            return (x * inv_rms) * weight
+
+        x_norm_1 = rms_norm_functional(x, rms_scale_1)
+
+        # project q k v & transpose
+        # Q = x_norm_1 @ w_q.T and transpose -> (num_q_heads, seq_len, head_dim)
+        Q = torch.matmul(x_norm_1, w_q.T).view(seq_len, num_q_heads, head_dim).transpose(0, 1)
+        K = torch.matmul(x_norm_1, w_k.T).view(seq_len, num_kv_heads, head_dim).transpose(0, 1)
+        V = torch.matmul(x_norm_1, w_v.T).view(seq_len, num_kv_heads, head_dim).transpose(0, 1)
+
+        # apply RoPE
+        def apply_rope(q: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+            """
+            按公式实现RoPE旋转操作
+            Args:
+                q: 输入张量，形状 [..., d]（d必须是偶数，这里按32+32=64举例）
+                cos: 位置余弦编码，形状和q相同
+                sin: 位置正弦编码，形状和q相同
+            Returns:
+                旋转后的张量，形状和q相同
+            """
+            # 按公式拆分q1和q2（前后各一半）
+            q1 = q[..., : q.shape[-1] // 2]
+            q2 = q[..., q.shape[-1] // 2 :]
+            
+            # 按公式计算旋转后的两部分
+            q_rot1 = q1 * cos - q2 * sin
+            q_rot2 = q1 * sin + q2 * cos
+            
+            # 拼接回完整的特征维度
+            return torch.cat([q_rot1, q_rot2], dim=-1)
+
+        Q = apply_rope(Q, cos, sin)
+        K = apply_rope(K, cos, sin)
+
+        # groups query attention & causal
+        def grouped_query_attention(
+            Q: torch.Tensor,
+            K: torch.Tensor,
+            V: torch.Tensor,
+            causal: bool = True,
+            scale: bool = True
+        ) -> torch.Tensor:
+            """
+            Grouped Query Attention (GQA) 带因果掩码
+            输入格式严格匹配要求：
+            Q: (num_q_heads, seq_len, head_dim)
+            K: (num_kv_heads, seq_len, head_dim)
+            V: (num_kv_heads, seq_len, head_dim)
+            
+            约束：num_q_heads 必须能被 num_kv_heads 整除
+            """
+            # 获取维度
+            num_q_heads, seq_len, head_dim = Q.shape
+            num_kv_heads = K.shape[0]
+            
+            # 分组数：每个KV头对应多少个Q头
+            group_size = num_q_heads // num_kv_heads
+            assert num_q_heads % num_kv_heads == 0, "Q头数量必须能被KV头数量整除"
+
+            # 1) 缩放因子（默认开启）
+            if scale:
+                scale_factor = head_dim ** (-0.5)
+            else:
+                scale_factor = 1.0
+            Q = Q * scale_factor
+
+            # 2) KV 重排，适配分组：[num_kv_heads, L, D] → [num_q_heads, L, D]
+            # 每个KV头复制 group_size 次，对应一组Q头
+            K = K.repeat_interleave(group_size, dim=0)  # [num_q_heads, L, D]
+            V = V.repeat_interleave(group_size, dim=0)  # [num_q_heads, L, D]
+
+            # 3) 计算注意力分数
+            # [H, L, D] × [H, D, L] → [H, L, L]
+            attn_score = torch.matmul(Q, K.transpose(-2, -1))
+
+            # 4) 因果掩码（下三角掩码，只允许看当前及之前位置）
+            if causal:
+                # 生成下三角掩码：[L, L]，上三角为 -inf
+                mask = torch.tril(torch.ones(seq_len, seq_len, device=Q.device))
+                mask = mask.masked_fill(mask == 0, torch.finfo(Q.dtype).min)
+                # 加到注意力分数上
+                attn_score = attn_score + mask
+
+            # 权重 + 输出
+            attn_weight = F.softmax(attn_score, dim=-1)
+            out = torch.matmul(attn_weight, V)  # [num_q_heads, seq_len, head_dim]
+
+            # ==============================================
+            # 转换成 (seq_len, num_q_heads * head_dim)
+            # ==============================================
+            out = out.transpose(0, 1)  # [seq_len, num_q_heads, head_dim]
+            out = out.flatten(1)       # [seq_len, num_q_heads * head_dim]
+
+            return out
+        
+        attn_out = grouped_query_attention(Q, K, V)
+
+        # project attn_out & residual
+        attn_out_project_res = torch.matmul(attn_out, w_o.T) + x
+
+        # RMS Norm
+        x_norm_2 = rms_norm_functional(attn_out_project_res, rms_scale_2)
+
+        # Gate & Up Proj 
+        x_gate = torch.matmul(x_norm_2, w_gate.T)
+        x_up = torch.matmul(x_norm_2, w_up.T)
+        x_swiglue = F.silu(x_gate) * x_up
+        output = torch.matmul(x_swiglue, w_down.T) + attn_out_project_res
+        return output
+
+    pytorch_output = pytorch_llama_transformer_block(x, weights, cos, sin)
+
+    # 打印结果
+    print("LeetGPU:", out[-5:, 128:])
+    print("PyTorch:", pytorch_output[-5:, 128:])
+
+    # 验证结果
+    compare_tensors(out, pytorch_output, 1e-2, 1e-2)
+
+
+def ssm_selective_scan():
+    # 测试数据
+    pass
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     # vector_addition()
@@ -2990,4 +3369,7 @@ if __name__ == "__main__":
     # topp_sampling()
     # fft_2D()
     # fast_fft()
-    int8_kvcache_attntion()
+    # int8_kvcache_attntion()
+    # swiglu_mlp_block()
+    # causal_depthwise_conv1D()
+    llama_transformer_block()

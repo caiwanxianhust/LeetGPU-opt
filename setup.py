@@ -78,6 +78,10 @@ setup(
                 "src/fft_2D.cu",
                 "src/fast_fft.cu",  # 添加 fast_fft.cu
                 "src/int8_kvcache_attntion.cu",
+                "src/swiglu_mlp_block.cu",
+                "src/causal_depthwise_conv1D.cu",
+                "src/llama_transformer_block.cu",
+                "src/ssm_selective_scan.cu",  # 添加 ssm_selective_scan.cu
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [
