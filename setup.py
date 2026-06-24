@@ -82,6 +82,7 @@ setup(
                 "src/causal_depthwise_conv1D.cu",
                 "src/llama_transformer_block.cu",
                 "src/ssm_selective_scan.cu",  # 添加 ssm_selective_scan.cu
+                "src/group_normalization.cu",  # 添加 group_normalization.cu
                 "src/bindings.cu"],
             extra_compile_args={
                 "nvcc": [

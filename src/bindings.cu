@@ -326,6 +326,11 @@ void ssm_selective_scan_cuda(
     int d_model, int d_state
 ); 
 
+void group_normalization_cuda(
+    const float* X, const float* gamma, const float* beta, float* Y, int N, int C,
+    int H, int W, int G, float eps
+);
+
 
 
 
@@ -2160,6 +2165,37 @@ torch::Tensor ssm_selective_scan(
 }
 
 
+torch::Tensor group_normalization(
+    const torch::Tensor& x,
+    const torch::Tensor& gamma,
+    const torch::Tensor& beta,
+    int G, float eps
+) {
+    TORCH_CHECK(x.ndimension() == 4, "Input must be 4D");
+    TORCH_CHECK(gamma.ndimension() == 1, "gamma must be 1D");
+    TORCH_CHECK(beta.ndimension() == 1, "beta must be 1D");
+
+    int N = x.size(0);
+    int C = x.size(1);
+    int H = x.size(2);
+    int W = x.size(3);
+
+    TORCH_CHECK(gamma.size(0) == C, "gamma must have shape (C)");
+    TORCH_CHECK(beta.size(0) == C, "beta must have shape (C)");
+    TORCH_CHECK(C % G == 0, "C must be divisible by G");
+
+    torch::Tensor output = torch::empty_like(x);
+    group_normalization_cuda(
+        x.data_ptr<float>(),
+        gamma.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, C, H, W, G, eps
+    );
+    return output;
+}
+
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
@@ -2235,4 +2271,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("causal_depthwise_conv1D", &causal_depthwise_conv1D, "Causal Depthwise Conv1d (CUDA)");
     m.def("llama_transformer_block", &llama_transformer_block, "Llama Transformer Block (CUDA)");
     m.def("ssm_selective_scan", &ssm_selective_scan, "SSM Selective Scan (CUDA)");
+    m.def("group_normalization", &group_normalization, "Group Normalization (CUDA)");
 }

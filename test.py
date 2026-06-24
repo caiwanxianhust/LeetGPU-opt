@@ -3294,7 +3294,43 @@ def ssm_selective_scan():
     pass
 
 
+def group_normalization():
+    # 测试数据
+    N, C, H, W, G = 20, 512, 64, 64, 32
+    eps = 1e-5
+    x = torch.randn(N, C, H, W, device="cuda", dtype=torch.float32)
+    gamma = torch.randn(C, device="cuda", dtype=torch.float32)
+    beta = torch.randn(C, device="cuda", dtype=torch.float32)
 
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_group_norm(x, gamma, beta, G, eps):
+        output = leetgpu.group_normalization(x, gamma, beta, G, eps)
+        return output
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_group_norm(X, gamma, beta, G, eps=1e-5):
+        """
+        X: 输入张量，形状 (N, C, H, W)
+        gamma: 缩放参数，形状 (C,)
+        beta: 偏移参数，形状 (C,)
+        G: 组数
+        eps: 数值稳定性参数
+        """
+        # group_norm要求输入为4D，且gamma/beta需匹配通道数
+        Y = F.group_norm(X, num_groups=G, weight=gamma, bias=beta, eps=eps)
+        return Y
+
+    out = leetgpu_group_norm(x, gamma, beta, G, eps)
+    pytorch_out = pytorch_group_norm(x, gamma, beta, G, eps)
+
+    # 打印结果
+    print("LeetGPU:", out.shape, out[0, :5, :5, :5])
+    print("PyTorch:", pytorch_out.shape, pytorch_out[0, :5, :5, :5])
+
+    # 验证结果
+    compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
 
@@ -3372,4 +3408,5 @@ if __name__ == "__main__":
     # int8_kvcache_attntion()
     # swiglu_mlp_block()
     # causal_depthwise_conv1D()
-    llama_transformer_block()
+    # llama_transformer_block()
+    group_normalization()
