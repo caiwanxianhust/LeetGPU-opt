@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include "cuda_kernels.cuh"
+#include <torch/extension.h>
 
 /*
 Write a GPU program that counts the number of elements with the integer value k in an 2D array of 32-bit integers. The program should count the number of elements with k in an 2D array. You are given an input 2D array input of length N x M and integer k.
@@ -24,36 +25,6 @@ Constraints
 1 ≤ input[i], k ≤ 100
 */
 
-// __device__ int warp_all_reduce_sum(int val) {
-
-//     for (int mask = 16; mask > 0; mask >>= 1) {
-//         val += __shfl_xor_sync(0xffffffff, val, mask);
-//     }
-//     return val;
-// }
-
-
-// __device__ int block_all_reduce_sum(int val) {
-//     __shared__ int result;
-//     __shared__ int s_buf[32];
-//     int warp_id = threadIdx.x >> 5;
-//     int lane_id = threadIdx.x & 0x1f;
-
-//     val = warp_all_reduce_sum(val);
-//     if (lane_id == 0) {
-//         s_buf[warp_id] = val;
-//     }
-//     __syncthreads();
-
-//     val = threadIdx.x < (blockDim.x >> 5) ? s_buf[threadIdx.x] : 0;
-//     val = warp_all_reduce_sum(val);
-
-//     if (threadIdx.x == 0) {
-//         result = val;
-//     }
-//     __syncthreads();
-//     return result;
-// }
 
 __global__ void count_2d_equal_kernel(const int* input, int* output, int N, int M, int K) {
 
@@ -78,4 +49,22 @@ void count_2d_equal_cuda(const int* input, int* output, int N, int M, int K) {
 
     count_2d_equal_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, N, M, K);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor count_equal_2D(
+    const torch::Tensor& input,
+    int M, int N, int K
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(input.size(0) == M * N, "Input must be a 2D matrix");
+    torch::Tensor output = torch::zeros({1}, input.options());
+    count_2d_equal_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        M, N, K
+    );
+    return output;
 }

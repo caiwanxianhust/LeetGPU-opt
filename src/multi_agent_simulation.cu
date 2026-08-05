@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -102,4 +103,26 @@ void multi_agent_sim_cuda(const float* agents, float* agents_next, int N)
 {
     multi_agent_sim_kernel<<<N, 256>>>(agents, agents_next, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor multi_agent_sim(
+    const torch::Tensor& agents
+) {
+    TORCH_CHECK(agents.ndimension() == 2, "Agents must be 2D");
+    TORCH_CHECK(agents.device().is_cuda(), "Agents must be on CUDA");
+    TORCH_CHECK(agents.dtype() == torch::kFloat32, "Agents must be of type float32");
+    TORCH_CHECK(agents.size(1) == 4, "Each agent must have 4 attributes (x, y, vx, vy)");
+
+    int N = agents.size(0);
+    auto options = agents.options();
+    torch::Tensor updated_agents = torch::empty({N, 4}, options);
+
+    multi_agent_sim_cuda(
+        agents.data_ptr<float>(),
+        updated_agents.data_ptr<float>(),
+        N
+    );
+
+    return updated_agents;
 }

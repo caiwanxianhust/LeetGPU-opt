@@ -2,6 +2,7 @@
 
 #include <cuda.h>
 #include <stdio.h>
+#include <torch/extension.h>
 
 
 /*
@@ -146,3 +147,26 @@ void matrix_power_cuda(const float* input, float* output, int N, int P) {
         return;
     }
 } 
+
+
+torch::Tensor matrix_power(
+    const torch::Tensor& input,
+    int power
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(power >= 0, "Power must be non-negative");
+    TORCH_CHECK(input.size(0) == input.size(1), "Input must be square");
+
+    torch::Tensor output = torch::empty_like(input);
+
+    matrix_power_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input.size(0),
+        power
+    );
+
+    return output;
+}

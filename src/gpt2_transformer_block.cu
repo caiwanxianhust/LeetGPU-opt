@@ -1,6 +1,9 @@
 #include "utils.cuh"
 #include "cuda_kernels.cuh"
 
+#include <torch/extension.h>
+
+
 
 /*
 https://leetgpu.com/challenges/gpt-2-transformer-block
@@ -1263,4 +1266,23 @@ void gpt2_transformer_block_cuda(const float* x, float* output, const float* wei
 {
     // gpt2_transformer_block_naive_cuda(x, output, weights, seq_len);
     gpt2_transformer_block_pipeline_matmul_cuda(x, output, weights, seq_len);
+}
+
+
+torch::Tensor gpt2_transformer_block(
+    const torch::Tensor& x,
+    const torch::Tensor& weights
+) {
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(weights.ndimension() == 1, "weights must be 1D");
+
+    int seq_len = x.size(0);
+    int d_model = x.size(1);
+    torch::Tensor output = torch::empty({seq_len, d_model}, x.options());
+    gpt2_transformer_block_cuda(
+        x.data_ptr<float>(), 
+        output.data_ptr<float>(), 
+        weights.data_ptr<float>(), 
+        seq_len);
+    return output;
 }

@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -87,3 +88,23 @@ void subarray_sum_cuda(const int* input, int* output, int N, int S, int E) {
     return;
 }
 
+
+torch::Tensor subarray_sum(
+    const torch::Tensor& input,
+    const int S, const int E
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(input.size(0) >= S && input.size(0) >= E, "Invalid range");
+    TORCH_CHECK(S < E, "Invalid range");
+
+    int n = input.size(0);
+    torch::Tensor output = torch::zeros({1}, input.options());
+    subarray_sum_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, S, E
+    );
+    return output;
+}

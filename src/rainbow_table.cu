@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a program that performs R rounds of parallel hashing on an array of 32-bit integers using the provided hash function. The hash should be applied R times iteratively (the output of one round becomes the input to the next).
@@ -54,4 +56,23 @@ void rainbow_table_cuda(const int* input, unsigned int* output, int N, int R) {
     
     fnv1a_hash_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, N, R);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor rainbow_table(
+    const torch::Tensor& input,
+    int R
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    int N = input.size(0);
+    auto options = input.options().dtype(torch::kUInt32);  // 正确的写法
+    torch::Tensor output = torch::empty({N}, options);
+    rainbow_table_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<unsigned int>(),
+        N, R
+    );
+    return output;
 }

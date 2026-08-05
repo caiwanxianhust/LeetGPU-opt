@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda.h>
+#include <cuda_runtime.h>
 #include <cfloat>
 #include <stdint.h>
 
@@ -166,7 +168,7 @@ static __device__ MD_F block_all_reduce_sum_mdf(MD_F val) {
     __syncthreads();
 
     MD_F tmp;
-    tmp.m = -FLT_MAX;
+    tmp.m = -INFINITY;
     tmp.d = 0.0f;
     val = threadIdx.x < (blockDim.x >> 5) ? s_buf[threadIdx.x] : tmp;
     val = warp_all_reduce_sum_mdf(val);
@@ -212,7 +214,7 @@ static __device__ float block_all_reduce_max(float val) {
     }
     __syncthreads();
 
-    val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : -FLT_MAX;
+    val = (threadIdx.x < (blockDim.x >> 5)) ? shared[threadIdx.x] : -INFINITY;
     val = warp_all_reduce_max(val);
 
     if (threadIdx.x == 0) {

@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a program that performs the leaky ReLU activation function on a vector of floating-point numbers. The leaky ReLU function is defined as:
@@ -36,4 +38,23 @@ void leaky_relu_cuda(const float* input, float* output, int N) {
 
     leaky_relu_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+
+torch::Tensor leaky_relu(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+    leaky_relu_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
 }

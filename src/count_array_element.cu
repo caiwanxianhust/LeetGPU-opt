@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Write a GPU program that counts the number of elements with the integer value k in an array of 32-bit integers. The program should count the number of elements with k in an array. You are given an input array input of length N and integer k.
@@ -45,4 +47,23 @@ void count_equal_cuda(const int* input, int* output, int N, int K) {
 
     count_equal_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, N, K);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor count_equal(
+    const torch::Tensor& input,
+    int K
+) { 
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    int N = input.size(0);
+    torch::Tensor output = torch::zeros({1}, input.options());
+    count_equal_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        N,
+        K
+    );
+    return output;
 }

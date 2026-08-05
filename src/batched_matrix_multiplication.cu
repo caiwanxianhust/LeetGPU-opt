@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 /*
 Implement a batched matrix multiplication in FP32. Given a batch of matrices A of shape [B, M, K] and a batch of matrices B of shape [B, K, N], compute the output batch C of shape [B, M, N] such that for each batch index b:
@@ -328,3 +329,35 @@ static void launch_batched_matmul_kernel(const float* A, const float* B, float* 
 void batched_matmul_cuda(const float* A, const float* B, float* C, int BATCH, int M, int N, int K) {
     launch_batched_matmul_kernel(A, B, C, BATCH, M, N, K);
 } 
+
+
+torch::Tensor batched_matmul(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 3, "Input A must be 3D");
+    TORCH_CHECK(B.ndimension() == 3, "Input B must be 3D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "Input B must be of type float32");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have the same batch size");
+    TORCH_CHECK(A.size(2) == B.size(1), "Input tensors must have compatible shapes");
+
+    int BATCH = A.size(0);
+    int M = A.size(1);
+    int N = B.size(2);
+    int K = A.size(2);
+
+    auto options = A.options();
+    torch::Tensor C = torch::empty({BATCH, M, N}, options);
+
+    batched_matmul_cuda(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        BATCH, M, N, K
+    );
+
+    return C;
+}

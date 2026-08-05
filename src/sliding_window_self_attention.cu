@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <cfloat>
+#include <torch/extension.h>
 
 
 static __host__ __device__ int div_up(int a, int b) {
@@ -217,5 +218,41 @@ void sliding_window_self_attention_cuda(
     const float* Q, const float* K, const float* V, float* output, int M, int d, int window_size
 ) {
     sliding_window_self_attention_serial_accumulation_cuda(Q, K, V, output, M, d, window_size);
+}
+
+
+torch::Tensor sliding_window_self_attention(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    const int window_size
+) { 
+    TORCH_CHECK(Q.ndimension() == 2, "Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.size(0) == K.size(0), "Q and K must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Q and K must have the same number of columns");
+    TORCH_CHECK(Q.size(0) == V.size(0), "Q and V must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == V.size(1), "Q and V must have the same number of columns");
+    TORCH_CHECK(window_size > 0 && window_size <= 32, "Window size must be positive");
+
+    int M = Q.size(0);
+    int d_model = Q.size(1);
+    torch::Tensor output = torch::zeros({M, d_model}, Q.options());
+
+    sliding_window_self_attention_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, d_model, window_size
+    );
+    return output;
 }
 

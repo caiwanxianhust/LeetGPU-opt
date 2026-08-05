@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a radix sort algorithm that sorts an array of 32-bit unsigned integers on a GPU. The program should take an input array of unsigned integers and sort them in ascending order using the radix sort algorithm. The input parameter contains the unsorted array, and the sorted result should be stored in the output array.
@@ -145,4 +147,24 @@ void radix_sort_cuda(const unsigned int* d_input, unsigned int* d_output, int N)
     cudaFree(d_blockHists);
     cudaFree(d_blockOffs);
     cudaFree(d_digitBase);
+}
+
+
+torch::Tensor radix_sort(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kUInt32, "Input must be of type uint32");
+
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+
+    radix_sort_cuda(
+        input.data_ptr<unsigned int>(),
+        output.data_ptr<unsigned int>(),
+        N
+    );
+    return output;
 }

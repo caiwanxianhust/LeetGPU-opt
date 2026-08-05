@@ -3,6 +3,8 @@
 #include <cuda_fp16.h>
 #include <stdint.h>
 #include <mma.h>
+#include <torch/extension.h>
+
 
 using namespace nvcuda;
 
@@ -537,4 +539,26 @@ void int4_weight_only_quantized_matMul_cuda(
 {
     // wmma_w4a16::int4_weight_only_quantized_matMul_wmma_cuda(x, w_q, scales, y, M, N, K, group_size);
     naive_w4a16::int4_weight_only_quantized_matMul_naive_cuda(x, w_q, scales, y, M, N, K, group_size);
+}
+
+
+torch::Tensor int4_weight_only_quantized_matMul(
+    const torch::Tensor& x,
+    const torch::Tensor& w_q,
+    const torch::Tensor& scales,
+    const int group_size
+) {
+    int M = x.size(0);
+    int K = x.size(1);
+    int N = w_q.size(0);
+    torch::Tensor output = torch::empty({M, N}, x.options());
+
+    int4_weight_only_quantized_matMul_cuda(
+        reinterpret_cast<const half*>(x.data_ptr<at::Half>()),
+        w_q.data_ptr<uint8_t>(),
+        reinterpret_cast<const half*>(scales.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(output.data_ptr<at::Half>()),
+        M, N, K, group_size
+    );
+    return output;
 }

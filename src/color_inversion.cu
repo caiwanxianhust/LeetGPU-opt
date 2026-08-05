@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /**
 Write a program to invert the colors of an image. The image is represented as a 1D array of RGBA (Red, Green, Blue, Alpha) values, where each component is an 8-bit unsigned integer (unsigned char).
@@ -72,4 +74,18 @@ void color_invert_vec(unsigned char* image, int width, int height) {
 void color_invert_cuda(unsigned char* image, int width, int height) {
     color_invert_vec(image, width, height);
     // color_invert_naive(image, width, height);
+}
+
+
+void color_invert(
+    const torch::Tensor& image, int width, int height
+) {
+    TORCH_CHECK(image.ndimension() == 1, "Image must be 1D");
+    TORCH_CHECK(image.device().is_cuda(), "Image must be on CUDA");
+    TORCH_CHECK(image.dtype() == torch::kUInt8, "Image must be of type uint8");
+    color_invert_cuda(
+        image.data_ptr<unsigned char>(),
+        width, height
+    );
+    return;
 }

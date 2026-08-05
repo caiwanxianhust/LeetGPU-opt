@@ -66,9 +66,9 @@ def compare_tensors(tensor1, tensor2, atol=1e-3, rtol=1e-5, max_print=10):
 
 def matrix_multiplication():
     # 测试FP32
-    M = 4007
-    N = 5286
-    K = 972
+    M = 5120
+    N = 4096
+    K = 4096
     a = torch.randn(M, K, device="cuda", dtype=torch.float32)
     # b = torch.randn(N, K, device="cuda", dtype=torch.float32)
     b = torch.randn(K, N, device="cuda", dtype=torch.float32)
@@ -1593,7 +1593,7 @@ def mha():
 
 def multi_agent_simulation():
     # 测试
-    N = 10000
+    N = 500
     x = torch.randn(N, 4, device="cuda", dtype=torch.float32)
 
     # 用 PyTorch 实现
@@ -3333,6 +3333,542 @@ def group_normalization():
     compare_tensors(out, pytorch_out, atol=1e-3, rtol=1e-3, max_print=10)
 
 
+def test_token_embedding_layer():
+    # 测试输入数据
+    B = 8
+    T = 100
+    D = 1024
+    P = 512
+    V = 1000
+    token_ids = torch.randint(0, V, (B, T), dtype=torch.int32, device="cuda")
+    token_embedding = torch.randn(V, D, dtype=torch.float32, device="cuda")
+    position_ids = torch.arange(T, dtype=torch.int32, device="cuda")
+    position_embedding = torch.randn(P, D, dtype=torch.float32, device="cuda")
+    gamma = torch.randn(D, dtype=torch.float32, device="cuda")
+    beta = torch.randn(D, dtype=torch.float32, device="cuda")
+    eps = 1e-5
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_token_embedding_layer(token_ids, position_ids, token_embedding, position_embedding, gamma, beta, eps):
+        return leetgpu.token_embedding_layer(token_ids, position_ids, token_embedding, position_embedding, gamma, beta, eps)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_token_embedding_layer(token_ids, position_ids, token_embedding, position_embedding, gamma, beta, eps):
+        # 这里是 PyTorch 的实现逻辑，需要根据实际需求进行实现
+        token_emb = token_embedding[token_ids]
+        position_emb = position_embedding[position_ids]
+        x = token_emb + position_emb
+
+        mean = x.mean(dim=-1, keepdim=True)
+        variance = x.var(dim=-1, keepdim=True, unbiased=False)
+        x_norm = (x - mean) / torch.sqrt(variance + eps)
+        output = gamma * x_norm + beta
+        
+        return output
+
+    # 运行测试
+    res_leetgpu = leetgpu_token_embedding_layer(token_ids, position_ids, token_embedding, position_embedding, gamma, beta, eps)
+    res_pytorch = pytorch_token_embedding_layer(token_ids, position_ids, token_embedding, position_embedding, gamma, beta, eps) 
+
+    # 打印结果
+    print("LeetGPU:", res_leetgpu.shape, res_leetgpu[0, :5, :5])
+    print("PyTorch:", res_pytorch.shape, res_pytorch[0, :5, :5])
+
+    # 比较结果
+    compare_tensors(res_leetgpu, res_pytorch)
+
+def attention_with_sinks():
+    # 测试数据
+    M, d = 5000, 100
+    q = torch.randn(M, d, device="cuda", dtype=torch.float32)
+    k = torch.randn(M, d, device="cuda", dtype=torch.float32)
+    v = torch.randn(M, d, device="cuda", dtype=torch.float32)
+    num_sinks, window_size = 4, 1024
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_attention_with_sinks(q, k, v, num_sinks, window_size):
+        return leetgpu.attention_with_sinks(q, k, v, num_sinks, window_size)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_attention_with_sinks(Q, K, V, num_sinks, window_size):
+        """
+        实现 Attention with Sinks 机制。
+
+        Args:
+            Q (torch.Tensor): Query 矩阵, shape (M, d)
+            K (torch.Tensor): Key 矩阵, shape (M, d)
+            V (torch.Tensor): Value 矩阵, shape (M, d)
+            num_sinks (int): 下沉 token 的数量。
+            window_size (int): 滑动窗口的大小。
+
+        Returns:
+            torch.Tensor: 输出矩阵, shape (M, d)
+        """
+        M, d = Q.shape
+        
+        # 1. 计算缩放后的点积注意力分数
+        # scores 的形状为 (M, M)，其中 scores[i, j] 是 query i 和 key j 之间的分数
+        scale = math.sqrt(d)
+        scores = torch.matmul(Q, K.T) / scale
+        
+        # 2. 创建注意力掩码 (Attention Mask)
+        # 我们将创建一个布尔掩码，True 表示允许关注，False 表示不允许。
+        
+        # 创建一个包含所有索引的张量 [0, 1, ..., M-1]
+        indices = torch.arange(M, device=Q.device)
+        
+        # a) 因果掩码: j <= i
+        # unsqueeze 用于广播，生成一个 (M, M) 的布尔矩阵
+        causal_mask = indices.unsqueeze(0) <= indices.unsqueeze(1)
+        
+        # b) 下沉 token 掩码: j < num_sinks
+        sink_mask = indices.unsqueeze(0) < num_sinks
+        
+        # c) 滑动窗口掩码: j >= i - window_size + 1
+        window_mask = indices.unsqueeze(0) >= (indices.unsqueeze(1) - window_size + 1)
+        
+        # d) 组合所有条件
+        # 允许的条件是：(是下沉token 或 在窗口内) 且 满足因果约束
+        allowed_positions = (sink_mask | window_mask) & causal_mask
+        
+        # 3. 应用掩码
+        # 将不允许的位置（allowed_positions 为 False 的地方）的分数设置为 -inf
+        # 这样在后续的 softmax 中，这些位置的权重会变为 0
+        masked_scores = scores.masked_fill(~allowed_positions, float('-inf'))
+        
+        # 4. 在允许的维度上应用 Softmax
+        # dim=1 表示对每一行（即每个 query）进行 softmax
+        attention_weights = torch.softmax(masked_scores, dim=1)
+        
+        # 5. 计算加权和得到最终输出
+        output = torch.matmul(attention_weights, V)
+        
+        return output
+
+    # 运行测试
+    print("LeetGPU:")
+    res_leetgpu = leetgpu_attention_with_sinks(q, k, v, num_sinks, window_size)
+    print("PyTorch:")
+    res_pytorch = pytorch_attention_with_sinks(q, k, v, num_sinks, window_size)
+
+    # 验证结果
+    compare_tensors(res_leetgpu, res_pytorch, 1e-3, 1e-3)
+
+def grpo_surrogate_loss():
+    # 测试数据
+    B, G, S = 64, 16, 4096
+    clip_eps, beta = 0.2, 0.01
+    rewards = torch.randn(B, G, device="cuda", dtype=torch.float32)
+    log_pi = torch.randn(B, G, S, device="cuda", dtype=torch.float32)
+    log_pi_old = torch.randn(B, G, S, device="cuda", dtype=torch.float32)
+    log_pi_ref = torch.randn(B, G, S, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_grpo_surrogate_loss(rewards, log_pi, log_pi_old, log_pi_ref, clip_eps, beta):
+        return leetgpu.grpo_surrogate_loss(rewards, log_pi, log_pi_old, log_pi_ref, clip_eps, beta)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_grpo_surrogate_loss(rewards, log_pi, log_pi_old, log_ref, clip_eps, beta):
+        """
+        计算 GRPO Surrogate Loss
+        
+        参数:
+            rewards: [B, G] 奖励张量
+            log_pi: [B, G, S] 当前策略的对数概率
+            log_pi_old: [B, G, S] 旧策略的对数概率
+            log_ref: [B, G, S] 参考策略的对数概率
+            output: [1] 输出张量，用于写入结果
+            clip_eps: float, PPO 裁剪范围 epsilon
+    clip_eps：浮点数，用于确定 EPS 裁剪范围的 epsilon 值
+            beta: float, KL 散度惩罚系数
+            B, G, S: int, 维度大小
+        """
+        
+        # ---------------------------------------------------------
+        # 1. 计算 Group Normalized Advantage (组归一化优势)
+        # ---------------------------------------------------------
+        # rewards shape: [B, G]
+        # 我们需要在 G 维度上计算均值和标准差
+        
+        # 计算均值 mu: [B, 1]
+        # keepdim=True 保持维度，方便后续广播
+        mu = rewards.mean(dim=1, keepdim=True)
+        
+        # 计算标准差 sigma: [B, 1]
+        # unbiased=False 表示使用总体标准差 (除以 N)，符合题目公式中的 1/G
+        std = rewards.std(dim=1, keepdim=True, unbiased=False)
+        
+        # 计算 Advantage: [B, G]
+        # 公式: A = (R - mu) / (std + 1e-8)
+        advantage = (rewards - mu) / (std + 1e-8)
+        
+        # 将 Advantage 扩展为 [B, G, S] 以便与 token 级别的 log_probs 运算
+        # unsqueeze(2) 变成 [B, G, 1], expand 变成 [B, G, S]
+        advantage = advantage.unsqueeze(2).expand_as(log_pi)
+        
+        # ---------------------------------------------------------
+        # 2. 计算 PPO Clip Loss (策略梯度部分)
+        # ---------------------------------------------------------
+        # 计算比率 r = exp(log_pi - log_pi_old)
+        # 这一步利用了 log(a) - log(b) = log(a/b), exp 后即为 a/b
+        ratio = torch.exp(log_pi - log_pi_old)
+        
+        # 裁剪比率: clamp(ratio, 1-eps, 1+eps)
+        clipped_ratio = ratio.clamp(1.0 - clip_eps, 1.0 + clip_eps)
+        
+        # 计算 surrogate loss 的两项
+        # term1 = r * A
+        surr1 = ratio * advantage
+        
+        # term2 = clip(r) * A
+        surr2 = clipped_ratio * advantage
+        
+        # 取 min (PPO 的核心机制)
+        # L_clip = min(surr1, surr2)
+        ppo_loss = torch.min(surr1, surr2)
+        
+        # ---------------------------------------------------------
+        # 3. 计算 KL Divergence Penalty (KL 散度惩罚)
+        # ---------------------------------------------------------
+        # d = log_ref - log_pi
+        d = log_ref - log_pi
+        
+        # K = exp(d) - d - 1
+        # 这是一个 KL 散度的近似估计
+        kl_div = torch.exp(d) - d - 1.0
+        
+        # ---------------------------------------------------------
+        # 4. 综合计算最终 Loss
+        # ---------------------------------------------------------
+        # 目标函数 J = mean(L_clip - beta * K)
+        # 因为 optimizer 是最小化 loss，而 RL 是最大化 reward，所以取负号
+        # Loss = - mean(ppo_loss - beta * kl_div)
+        
+        final_loss = -(ppo_loss - beta * kl_div).mean().unsqueeze(0)
+        
+        # 将结果写入 output[0]
+        # detach() 不是必须的，但在某些框架交互中是个好习惯，这里直接赋值即可
+        return final_loss
+
+    # 运行测试
+    res_leetgpu = leetgpu_grpo_surrogate_loss(rewards, log_pi, log_pi_old, log_pi_ref, clip_eps, beta)
+    print("LeetGPU:", res_leetgpu)
+    res_pytorch = pytorch_grpo_surrogate_loss(rewards, log_pi, log_pi_old, log_pi_ref, clip_eps, beta)
+    print("PyTorch:", res_pytorch)
+    # 验证结果
+    compare_tensors(res_leetgpu, res_pytorch, 1e-3, 1e-3)
+
+def ppo_clipped_surrogate_loss():
+    # 测试数据
+    B, S = 256, 16384
+    clip_eps = 0.2
+    advantages = torch.randn(B, S, device="cuda", dtype=torch.float32)
+    log_pi = torch.randn(B, S, device="cuda", dtype=torch.float32)
+    log_pi_old = torch.randn(B, S, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_ppo_clipped_surrogate_loss(advantages, log_pi, log_pi_old, clip_eps):
+        return leetgpu.ppo_clipped_surrogate_loss(advantages, log_pi, log_pi_old, clip_eps)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_ppo_clipped_surrogate_loss(advantages, log_pi, log_pi_old, clip_eps):
+        """
+        使用 PyTorch 实现 PPO Clipped Surrogate Loss
+        
+        Args:
+            advantages (torch.Tensor): 优势函数 A, shape [B, S]
+            log_pi (torch.Tensor): 当前策略对数概率, shape [B, S]
+            log_pi_old (torch.Tensor): 旧策略对数概率, shape [B, S]
+            clip_eps (float): 裁剪参数 epsilon
+            
+        Returns:
+            torch.Tensor: 标量 loss, shape [1]
+        """
+        
+        # 1. 确保 advantages 和 log_pi_old 不参与梯度计算 (对应题目 "do not differentiate through them")
+        # 如果传入的 tensor 已经 requires_grad=False 则无影响，这里做个保险
+        advantages = advantages.detach()
+        log_pi_old = log_pi_old.detach()
+        
+        # 2. 计算概率比率 r = exp(log_pi - log_pi_old)
+        # 对应公式: r_{b,s} = exp(log pi_{b,s} - log pi^{old}_{b,s})
+        ratios = torch.exp(log_pi - log_pi_old)
+        
+        # 3. 计算裁剪后的比率 r_hat
+        # 对应公式: clip(r, 1 - epsilon, 1 + epsilon)
+        clipped_ratios = torch.clamp(ratios, 1.0 - clip_eps, 1.0 + clip_eps)
+        
+        # 4. 计算两项 surrogate objective
+        # term1 = r * A
+        surr1 = ratios * advantages
+        
+        # term2 = r_hat * A
+        surr2 = clipped_ratios * advantages
+        
+        # 5. 取两者的较小值 (PPO 的核心机制)
+        # 对应公式: min(r * A, r_hat * A)
+        # 注意：这里计算的是 Objective (我们要最大化的目标)，所以取 min 是为了保守估计
+        surrogate_loss_per_token = torch.min(surr1, surr2)
+        
+        # 6. 计算最终 Loss
+        # 对应公式: output[0] = - mean(sum(L_CLIP))
+        # PPO 是最大化 Objective，所以 Loss = -Objective
+        final_loss = -torch.mean(surrogate_loss_per_token).unsqueeze(0)
+        
+        return final_loss
+
+    # 运行测试
+    res_leetgpu = leetgpu_ppo_clipped_surrogate_loss(advantages, log_pi, log_pi_old, clip_eps)
+    print("LeetGPU:", res_leetgpu)
+    res_pytorch = pytorch_ppo_clipped_surrogate_loss(advantages, log_pi, log_pi_old, clip_eps)
+    print("PyTorch:", res_pytorch)
+
+    # 验证结果
+    compare_tensors(res_leetgpu, res_pytorch, 1e-3, 1e-3)
+
+def dpo_sequence_loss():
+    # 测试数据
+    B = 65535
+    beta = 0.2
+    chosen_logps = torch.randn(B, device="cuda", dtype=torch.float32)
+    rejected_logps = torch.randn(B, device="cuda", dtype=torch.float32)
+    chosen_ref_logps = torch.randn(B, device="cuda", dtype=torch.float32)
+    rejected_ref_logps = torch.randn(B, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_dpo_sequence_loss(chosen_logps, rejected_logps, chosen_ref_logps, rejected_ref_logps, beta):
+        return leetgpu.dpo_sequence_loss(chosen_logps, rejected_logps, chosen_ref_logps, rejected_ref_logps, beta)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_dpo_sequence_loss(chosen_logps, rejected_logps, chosen_ref_logps, rejected_ref_logps, beta):
+        """
+        计算 DPO Sequence Loss
+        
+        参数:
+        chosen_logps (torch.Tensor): 当前策略下优选回答的对数概率 [B]
+        rejected_logps (torch.Tensor): 当前策略下拒绝回答的对数概率 [B]
+        chosen_ref_logps (torch.Tensor): 参考策略下优选回答的对数概率 [B]
+        rejected_ref_logps (torch.Tensor): 参考策略下拒绝回答的对数概率 [B]
+        output (torch.Tensor): 用于存储结果的张量 [1]
+        beta (float): DPO 的温度系数
+        B (int): 批次大小
+        """
+        
+        # 1. 计算当前策略的 Log Probability 差值 (Delta_pi)
+        # Delta_pi = log_pi(chosen) - log_pi(rejected)
+        delta_pi = chosen_logps - rejected_logps
+        
+        # 2. 计算参考策略的 Log Probability 差值 (Delta_ref)
+        # Delta_ref = log_ref(chosen) - log_ref(rejected)
+        delta_ref = chosen_ref_logps - rejected_ref_logps
+        
+        # 3. 计算 DPO 的 Logits (z)
+        # z = beta * (Delta_pi - Delta_ref)
+        logits_z = beta * (delta_pi - delta_ref)
+        
+        # 4. 计算 Loss
+        # 题目要求使用 softplus(-z) 的形式以保持数值稳定
+        # Loss = mean(softplus(-z))
+        # F.softplus(x) 计算的是 log(1 + exp(x))
+        losses = F.softplus(-logits_z)
+        
+        # 6. 计算平均值并写入 output
+        final_loss = losses.mean().unsqueeze(0)
+        
+        return final_loss
+
+    # 运行测试
+    res_leetgpu = leetgpu_dpo_sequence_loss(chosen_logps, rejected_logps, chosen_ref_logps, rejected_ref_logps, beta)
+    print("LeetGPU:", res_leetgpu)
+    res_pytorch = pytorch_dpo_sequence_loss(chosen_logps, rejected_logps, chosen_ref_logps, rejected_ref_logps, beta)
+    print("PyTorch:", res_pytorch)
+
+    # 验证结果
+    compare_tensors(res_leetgpu, res_pytorch, 1e-3, 1e-3)
+
+def softmax_attention_backward():
+    # 测试数据
+    M, N, d = 8196, 4096, 128
+    Q = torch.randn(M, d, device="cuda", dtype=torch.float32)
+    K = torch.randn(N, d, device="cuda", dtype=torch.float32)
+    V = torch.randn(N, d, device="cuda", dtype=torch.float32)
+    dO = torch.randn(M, d, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_softmax_attention_backward(Q, K, V, dO):
+        return leetgpu.softmax_attention_backward(Q, K, V, dO)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_softmax_attention_backward(Q, K, V, dO):
+        """
+        实现 Scaled Dot-Product Attention 的反向传播
+        
+        Args:
+            Q: Query matrix, shape [M, d]
+            K: Key matrix, shape [N, d]
+            V: Value matrix, shape [N, d]
+            dO: Upstream gradient of Output, shape [M, d]
+            
+        Returns:
+            dQ, dK, dV: Gradients with respect to Q, K, V
+        """
+        
+        # 获取维度信息
+        M, d = Q.shape
+        N, _ = K.shape
+        
+        # 1. 计算缩放因子 sqrt(d)
+        scale = math.sqrt(d)
+        
+        # 2. 前向重算: 计算 Attention Weights (P)
+        # S = Q @ K.T / scale  -> shape [M, N]
+        # P = softmax(S)       -> shape [M, N]
+        # 注意：dim=1 表示按行进行 softmax
+        attn_weights = torch.softmax((Q @ K.t()) / scale, dim=1)
+        
+        # 3. 计算 dV
+        # 公式: dV = P^T @ dO
+        # [N, M] @ [M, d] -> [N, d]
+        dV = attn_weights.t() @ dO
+        
+        # 4. 计算 dP
+        # 公式: dP = dO @ V^T
+        # [M, d] @ [d, N] -> [M, N]
+        dP = dO @ V.t()
+        
+        # 5. 计算 dS (Softmax Backward)
+        # 这是一个难点，公式为: dS_ij = P_ij * (dP_ij - sum_k(P_ik * dP_ik))
+        
+        # 5.1 计算行求和部分: sum_k(P_ik * dP_ik)
+        # 先逐元素相乘，再沿列(dim=1)求和，保持维度以便广播
+        # shape: [M, N] -> [M, 1]
+        row_sums = (attn_weights * dP).sum(dim=1, keepdim=True)
+        
+        # 5.2 应用公式
+        # dP - row_sums 会利用广播机制，将 [M, 1] 减到 [M, N] 的每一列
+        dS = attn_weights * (dP - row_sums)
+        
+        # 6. 应用缩放因子的倒数
+        # 公式: dS_tilde = dS / sqrt(d)
+        dS_scaled = dS / scale
+        
+        # 7. 计算 dQ
+        # 公式: dQ = dS_tilde @ K
+        # [M, N] @ [N, d] -> [M, d]
+        dQ = dS_scaled @ K
+        
+        # 8. 计算 dK
+        # 公式: dK = dS_tilde^T @ Q
+        # [N, M] @ [M, d] -> [N, d]
+        dK = dS_scaled.t() @ Q
+        
+        return dQ, dK, dV
+
+    # 运行测试
+    dq_leetgpu, dk_leetgpu, dv_leetgpu = leetgpu_softmax_attention_backward(Q, K, V, dO)
+    print("LeetGPU:", dq_leetgpu[:5, :5], dk_leetgpu[:5, :5], dv_leetgpu[:5, :5])
+
+    # 运行测试
+    dq_pytorch, dk_pytorch, dv_pytorch = pytorch_softmax_attention_backward(Q, K, V, dO)
+    print("PyTorch:", dq_pytorch[:5, :5], dk_pytorch[:5, :5], dv_pytorch[:5, :5])
+
+    # 验证结果
+    print("Results compared: dQ")
+    compare_tensors(dq_leetgpu, dq_pytorch, 1e-3, 1e-3)
+    print("Results compared: dK")
+    compare_tensors(dk_leetgpu, dk_pytorch, 1e-3, 1e-3)
+    print("Results compared: dV")
+    compare_tensors(dv_leetgpu, dv_pytorch, 1e-3, 1e-3)
+
+def multi_head_cross_attention():
+    # 测试数据
+    M, N, H, D = 1024, 2048, 16, 128
+    
+    # 创建随机 Tensor (float32)
+    Q = torch.randn(M, H, D, device='cuda', dtype=torch.float32)
+    K = torch.randn(N, H, D, device='cuda', dtype=torch.float32)
+    V = torch.randn(N, H, D, device='cuda', dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_multi_head_cross_attention(Q, K, V):
+        return leetgpu.multi_head_cross_attention(Q, K, V)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_multi_head_cross_attention(Q, K, V):
+        """
+        实现 Multi-Head Cross-Attention
+        
+        Args:
+            Q: Query matrix, shape [M, H, D]
+            K: Key matrix, shape [N, H, D]
+            V: Value matrix, shape [N, H, D]
+            
+        Returns:
+            O: Output matrix, shape [M, H, D]
+        """
+        # 获取维度信息
+        M, H, D = Q.shape
+        
+        # 1. 计算缩放因子 (Scale Factor)
+        # 公式要求: 1 / sqrt(D)
+        scale = 1.0 / math.sqrt(D)
+        
+        # 2. 计算注意力分数 (Attention Scores)
+        # 我们需要计算 Q * K^T。
+        # Q: (M, H, D)
+        # K: (N, H, D) -> 转置后用于矩阵乘法需变为 (H, D, N) 或利用 einsum
+        # 结果 S: (M, H, N)
+        
+        # 方法 A: 使用 torch.einsum (推荐，语义清晰且高效)
+        # "mhd,nhd->mhn" 表示: 
+        # m(M), n(N), h(H), d(D)
+        # 对 d 维度求和，保留 m, h, n
+        scores = torch.einsum('mhd,nhd->mhn', Q, K)
+        
+        # 方法 B: 使用 matmul (需要调整维度以匹配矩阵乘法规则)
+        # scores = torch.matmul(Q.transpose(0, 1), K.transpose(0, 1).transpose(1, 2)).transpose(0, 1)
+        
+        # 3. 应用缩放 (Scaling)
+        scores = scores * scale
+        
+        # 4. Softmax 归一化
+        # 在 Key 的维度 (dim=-1, 即 N) 上进行 softmax
+        attn_weights = torch.softmax(scores, dim=-1)
+        
+        # 5. 加权求和 (Weighted Sum)
+        # attn_weights: (M, H, N)
+        # V: (N, H, D)
+        # 结果 output: (M, H, D)
+        
+        # 使用 einsum: "mhn,nhd->mhd"
+        output = torch.einsum('mhn,nhd->mhd', attn_weights, V)
+        
+        return output
+
+    # 运行测试
+    output_leetgpu = leetgpu_multi_head_cross_attention(Q, K, V)
+    print("LeetGPU:", output_leetgpu[:5, :5, :5])
+    output_pytorch = pytorch_multi_head_cross_attention(Q, K, V)
+    print("PyTorch:", output_pytorch[:5, :5, :5])
+
+    # 验证结果
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
+
+
 
 
 
@@ -3363,7 +3899,7 @@ if __name__ == "__main__":
     # avg_categorical_cross_entropy_loss()
     # mse_vec()
     # gaussian_blur()
-    # topk_1D()
+    topk_1D()
     # batched_matmul()
     # int8_quantized_matmul()
     # ordinary_least_squares()
@@ -3409,4 +3945,13 @@ if __name__ == "__main__":
     # swiglu_mlp_block()
     # causal_depthwise_conv1D()
     # llama_transformer_block()
-    group_normalization()
+    # group_normalization()
+    # test_token_embedding_layer()
+    # attention_with_sinks()
+    # grpo_surrogate_loss()
+    # ppo_clipped_surrogate_loss()
+    # dpo_sequence_loss()
+    # softmax_attention_backward()
+    # multi_head_cross_attention()
+
+    pass

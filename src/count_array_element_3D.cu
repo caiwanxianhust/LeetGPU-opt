@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -64,4 +65,26 @@ void count_array_element_3D_cuda(const int* input, int* output, int N, int M, in
     count_3d_equal_kernel<<<grid, block>>>(input, output, N * M, K, P);
     CHECK_CUDA_ERROR(cudaGetLastError());
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor count_equal_3D(
+    const torch::Tensor& input,
+    const int n, const int m, const int k,
+    const int p
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(input.size(0) == n * m * k, "Input must be a 3D matrix");
+
+    torch::Tensor output = torch::zeros({1}, input.options());
+
+    count_array_element_3D_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, m, k, p
+    );
+
+    return output;
 }

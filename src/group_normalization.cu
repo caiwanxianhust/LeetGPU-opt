@@ -1,6 +1,8 @@
 #include "utils.cuh"
 #include "cuda_kernels.cuh"
 
+#include <torch/extension.h>
+
 
 
 // Group Normalization CUDA Kernel
@@ -58,4 +60,35 @@ void group_normalization_cuda(const float* X, const float* gamma, const float* b
     dim3 block(256);
     dim3 grid(N, G);
     group_norm_kernel<<<grid, block>>>(X, gamma, beta, Y, N, C, H, W, G, eps);
+}
+
+
+torch::Tensor group_normalization(
+    const torch::Tensor& x,
+    const torch::Tensor& gamma,
+    const torch::Tensor& beta,
+    int G, float eps
+) {
+    TORCH_CHECK(x.ndimension() == 4, "Input must be 4D");
+    TORCH_CHECK(gamma.ndimension() == 1, "gamma must be 1D");
+    TORCH_CHECK(beta.ndimension() == 1, "beta must be 1D");
+
+    int N = x.size(0);
+    int C = x.size(1);
+    int H = x.size(2);
+    int W = x.size(3);
+
+    TORCH_CHECK(gamma.size(0) == C, "gamma must have shape (C)");
+    TORCH_CHECK(beta.size(0) == C, "beta must have shape (C)");
+    TORCH_CHECK(C % G == 0, "C must be divisible by G");
+
+    torch::Tensor output = torch::empty_like(x);
+    group_normalization_cuda(
+        x.data_ptr<float>(),
+        gamma.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, C, H, W, G, eps
+    );
+    return output;
 }

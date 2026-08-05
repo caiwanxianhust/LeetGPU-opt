@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -29,7 +30,7 @@ Performance is measured with num_q_heads = 32, num_kv_heads = 8, seq_len = 1,024
 */
 
 
-namespace GQA 
+namespace 
 {
 
 constexpr int BLOCK_SIZE = 128;
@@ -113,4 +114,41 @@ void gqa_cuda(const float* Q, const float* K, const float* V, float* output,
     gqa_kernel<<<grid, block, smem_size>>>(Q, K, V, output, num_q_heads, num_kv_heads, seq_len, head_dim);
 }
 
-} // namespace GQA
+} // namespace 
+
+
+torch::Tensor gqa(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V
+) {
+    TORCH_CHECK(Q.ndimension() == 3, "Q must be 3D");
+    TORCH_CHECK(K.ndimension() == 3, "K must be 3D");
+    TORCH_CHECK(V.ndimension() == 3, "V must be 3D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    int num_q_heads = Q.size(0);
+    int num_kv_heads = K.size(0);
+    int seq_len = Q.size(1);
+    int head_dim = Q.size(2);
+
+    TORCH_CHECK(K.size(1) == seq_len, "K must have the same sequence length as Q");
+    TORCH_CHECK(V.size(1) == seq_len, "V must have the same sequence length as Q");
+    TORCH_CHECK(K.size(2) == head_dim, "K must have the same head dimension as Q");
+    TORCH_CHECK(V.size(2) == head_dim, "V must have the same head dimension as Q");
+    TORCH_CHECK(num_q_heads % num_kv_heads == 0, "Number of Q heads must be a multiple of number of KV heads");
+
+    torch::Tensor output = torch::empty({num_q_heads, seq_len, head_dim}, Q.options());
+    gqa_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_q_heads, num_kv_heads, seq_len, head_dim
+    );
+    return output;
+}

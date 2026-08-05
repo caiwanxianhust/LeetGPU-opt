@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -30,7 +31,7 @@ struct VAL_INDEX {
     int index;
 };
 
-__device__ VAL_INDEX warp_reduce_min(VAL_INDEX val_index) {
+static __device__ VAL_INDEX warp_reduce_min(VAL_INDEX val_index) {
     VAL_INDEX other;
     for (int offset = 16; offset > 0; offset /= 2) {
         other.val = __shfl_xor_sync(0xffffffff, val_index.val, offset);
@@ -42,7 +43,7 @@ __device__ VAL_INDEX warp_reduce_min(VAL_INDEX val_index) {
     return val_index;
 }
 
-__device__ VAL_INDEX block_reduce_min(VAL_INDEX val_index) { 
+static __device__ VAL_INDEX block_reduce_min(VAL_INDEX val_index) { 
     val_index = warp_reduce_min(val_index);
     __shared__ VAL_INDEX shared[32]; // BLOCK_SIZE / warpSize
     __shared__ VAL_INDEX ret;
@@ -63,7 +64,7 @@ __device__ VAL_INDEX block_reduce_min(VAL_INDEX val_index) {
 }
 
 
-__global__ void nearest_neighbor_kernel(const float* points, int* indices, int N) {
+static __global__ void nearest_neighbor_kernel(const float* points, int* indices, int N) {
     const float3 *points_ptr = reinterpret_cast<const float3*>(points);
     int idx_cur = blockIdx.x;
     float3 p = points_ptr[idx_cur];
@@ -90,17 +91,6 @@ __global__ void nearest_neighbor_kernel(const float* points, int* indices, int N
     }
     __syncthreads();
     
-    // if (threadIdx.x == 0) {
-    //     int min_idx = -1;
-    //     float min_dist = FLT_MAX;
-    //     for (int i = 0; i < blockDim.x; i++) {
-    //         if (min_dist > min_dists[i]) {
-    //             min_dist = min_dists[i];
-    //             min_idx = min_indexs[i];
-    //         }
-    //     }
-    //     indices[idx_cur] = min_idx;
-    // }
     VAL_INDEX val_index{min_dists[threadIdx.x], min_indexs[threadIdx.x]};
     VAL_INDEX block_min = block_reduce_min(val_index);
     if (threadIdx.x == 0) {
@@ -118,3 +108,23 @@ void nearest_neighbor_cuda(const float* points, int* indices, int N) {
 }
 
 
+torch::Tensor nearest_neighbor(
+    const torch::Tensor& points
+) {
+    TORCH_CHECK(points.ndimension() == 2, "points arr must be 2D");
+    TORCH_CHECK(points.device().is_cuda(), "points must be on CUDA");
+    TORCH_CHECK(points.dtype() == torch::kFloat32, "points must be of type float32");
+    TORCH_CHECK(points.size(1) == 3, "points must be 3D");
+    int N = points.size(0);
+
+    auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+    torch::Tensor indices = torch::empty({N}, options);
+
+    nearest_neighbor_cuda(
+        points.data_ptr<float>(),
+        indices.data_ptr<int>(),
+        N
+    );
+
+    return indices;
+}

@@ -3,7 +3,7 @@
 
 #include <cub/cub.cuh>
 #include <cstdint>
-
+#include <torch/extension.h>
 #include <vector>
 #include <algorithm> // std::sort
 #include <numeric>   // std::iota
@@ -224,4 +224,27 @@ void topp_sampling_cuda(const float* logits, const float* p, const int* seed, in
 {
     // cub_sort::topp_sampling_Philox_cuda(logits, p, seed, sampled_token, vocab_size);
     cpu_sort::topp_sampling_Philox_cuda(logits, p, seed, sampled_token, vocab_size);
+}
+
+torch::Tensor topp_sampling(
+    const torch::Tensor& logits,
+    const torch::Tensor& p,
+    const torch::Tensor& seed
+) {
+    TORCH_CHECK(logits.ndimension() == 1, "logits must be 1D");
+    TORCH_CHECK(p.ndimension() == 1, "p must be 1D");
+    TORCH_CHECK(seed.ndimension() == 1, "seed must be 1D");
+    TORCH_CHECK(logits.device().is_cuda(), "logits must be on CUDA");
+    TORCH_CHECK(p.device().is_cuda(), "p must be on CUDA");
+    TORCH_CHECK(seed.device().is_cuda(), "seed must be on CUDA");
+    int vocab_size = logits.size(0);
+
+    torch::Tensor sampled_token = torch::zeros({1}, seed.options());
+    topp_sampling_cuda(
+        logits.data_ptr<float>(), 
+        p.data_ptr<float>(), 
+        seed.data_ptr<int>(), 
+        sampled_token.data_ptr<int>(), 
+        vocab_size);
+    return sampled_token;
 }

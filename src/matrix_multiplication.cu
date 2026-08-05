@@ -1,6 +1,19 @@
 #include "utils.cuh"
 
 #include <assert.h>
+#include <torch/extension.h>
+
+#include "cutlass/cutlass.h"
+#include "cutlass/gemm/device/gemm.h"
+#include "cutlass/util/command_line.h"
+#include "cutlass/util/host_tensor.h"
+#include "cutlass/util/reference/device/gemm.h"
+#include "cutlass/util/reference/host/tensor_compare.h"
+#include "cutlass/util/reference/host/tensor_copy.h"
+#include "cutlass/util/reference/host/tensor_fill.h"
+#include "cutlass/util/tensor_view_io.h"
+
+
 
 
 /*
@@ -1012,6 +1025,139 @@ void launch_matmul_rc_adavanced_kernel(const float* A, const float* B, float* C,
 
 
 
+namespace cutlass_tensorop_sm80 {
+
+void ampere_tf32_tensorop_gemm(const float* A, const float* B, float* C, int M, int N, int K)
+{
+    // The code section below describes datatype for input, output matrices and computation between
+    // elements in input matrices.
+    using ElementAccumulator = float;                   // <- data type of accumulator
+    using ElementComputeEpilogue = ElementAccumulator;  // <- data type of epilogue operations
+    using ElementInputA = float;                        // <- data type of elements in input matrix A
+    using ElementInputB = float;                        // <- data type of elements in input matrix B
+    using ElementOutput = float;                        // <- data type of elements in output matrix D
+
+    // The code section below describes matrix layout of input and output matrices. Column Major for
+    // Matrix A, Row Major for Matrix B and Row Major for Matrix C
+    using LayoutInputA = cutlass::layout::RowMajor;
+    using LayoutInputB = cutlass::layout::RowMajor;
+    using LayoutOutput = cutlass::layout::RowMajor;
+
+    // This code section describes whether you want to use tensor cores or regular SIMT cores on GPU SM
+    using MMAOp = cutlass::arch::OpClassTensorOp;
+
+    // This code section describes CUDA SM architecture number
+    using SmArch = cutlass::arch::Sm80;
+
+    // This code section describes the tile size a thread block will compute
+    using ShapeMMAThreadBlock =
+        cutlass::gemm::GemmShape<128, 128, 16>;  // <- threadblock tile M = 128, N = 128, K = 16
+    // This code section describes tile size a warp will compute
+    using ShapeMMAWarp = cutlass::gemm::GemmShape<64, 64, 16>;  // <- warp tile M = 64, N = 64, K = 16
+    // This code section describes the size of MMA op
+    using ShapeMMAOp = cutlass::gemm::GemmShape<16, 8, 8>;  // <- MMA Op tile M = 16, N = 8, K = 8
+
+    // This code section describes how threadblocks are scheduled on GPU
+    using SwizzleThreadBlock = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>;
+
+    // This code section describes the epilogue part of the kernel
+    using EpilogueOp = cutlass::epilogue::thread::LinearCombination<
+        ElementOutput,                                     // <- data type of output matrix
+        128 / cutlass::sizeof_bits<ElementOutput>::value,  // <- the number of elements per vectorized
+                                                        // memory access. For a byte, it's 16
+                                                        // elements. This becomes the vector width of
+                                                        // math instructions in the epilogue too
+        ElementAccumulator,                                // <- data type of accumulator
+        ElementComputeEpilogue,
+        cutlass::epilogue::thread::ScaleType::NoBetaScaling
+        >;  // <- data type for alpha/beta in linear combination function
+
+    // Number of pipelines you want to use
+    constexpr int NumStages = 4;
+
+    using Gemm = cutlass::gemm::device::Gemm<ElementInputA,
+                                            LayoutInputA,
+                                            ElementInputB,
+                                            LayoutInputB,
+                                            ElementOutput,
+                                            LayoutOutput,
+                                            ElementAccumulator,
+                                            MMAOp,
+                                            SmArch,
+                                            ShapeMMAThreadBlock,
+                                            ShapeMMAWarp,
+                                            ShapeMMAOp,
+                                            EpilogueOp,
+                                            SwizzleThreadBlock,
+                                            NumStages>;
+
+    // Initialize alpha and beta for dot product computation
+    ElementComputeEpilogue alpha = ElementComputeEpilogue(1);
+    ElementComputeEpilogue beta = ElementComputeEpilogue(0);
+
+    // Split K dimension into 1 partitions
+    int split_k_slices = 1;
+
+    // ========================================================================
+    // 4. 创建 Tensor Refs (关键：使用 const_cast 移除 const 属性)
+    // ========================================================================
+    cutlass::gemm::GemmCoord problem_size({M, N, K});  // <- problem size of matrix multiplication
+
+    cutlass::TensorRef<ElementInputA, LayoutInputA> tensor_a_ref(
+        const_cast<ElementInputA*>(A), 
+        LayoutInputA(problem_size.k())
+    );
+
+    cutlass::TensorRef<ElementInputB, LayoutInputB> tensor_b_ref(
+        const_cast<ElementInputB*>(B), 
+        LayoutInputB(problem_size.n())
+    );
+
+    cutlass::TensorRef<ElementOutput, LayoutOutput> tensor_c_ref(
+        C, 
+        LayoutOutput(problem_size.n())
+    );
+
+    // Create a tuple of gemm kernel arguments. This is later passed as arguments to launch
+    // instantiated CUTLASS kernel
+    typename Gemm::Arguments arguments{problem_size,  // <- problem size of matrix multiplication
+                                        tensor_a_ref,  // <- reference to matrix A on device
+                                        tensor_b_ref,  // <- reference to matrix B on device
+                                        tensor_c_ref,  // <- reference to matrix C on device
+                                        tensor_c_ref,  // <- reference to matrix D on device
+                                        {alpha, beta},          // <- tuple of alpha and beta
+                                        split_k_slices};        // <- k-dimension split factor
+
+    // Using the arguments, query for extra workspace required for matrix multiplication computation
+    size_t workspace_size = Gemm::get_workspace_size(arguments);
+
+    // Allocate workspace memory
+    cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
+
+    // Instantiate CUTLASS kernel depending on templates
+    Gemm gemm_op;
+
+    // Check the problem size is supported or not 
+    cutlass::Status status = gemm_op.can_implement(arguments);
+    CUTLASS_CHECK(status);
+
+    // Initialize CUTLASS kernel with arguments and workspace pointer
+    status = gemm_op.initialize(arguments, workspace.get());
+    CUTLASS_CHECK(status);
+
+    // Launch initialized CUTLASS kernel
+    status = gemm_op();
+    CUTLASS_CHECK(status);
+
+}
+
+
+}   // namespace cutlass_tensorop_sm80
+
+
+
+
+
 /** 
  * 矩阵乘法
  * 输入：
@@ -1025,8 +1171,9 @@ void matrix_multiplication_cuda(const float* A, const float* B, float* C, int M,
     // matmul_naive_fp32(A, B, C, M, N, K);
     // matmul_warp_fp32(A, B, C, M, N, K);
     // launchSgemmSmemKernel_double_buffer(A, B, C, M, N, K, 1.0f, 0.0f, 0);
-    launch_matmul_advanced_kernel(A, B, C, M, N, K);
+    // launch_matmul_advanced_kernel(A, B, C, M, N, K);
     // launch_matmul_kernel(A, B, C, M, N, K);
+    cutlass_tensorop_sm80::ampere_tf32_tensorop_gemm(A, B, C, M, N, K);
 }
 
 
@@ -1041,4 +1188,48 @@ void matrix_multiplication_cuda(const float* A, const float* B, float* C, int M,
 // A, B, C are device pointers (i.e. pointers to memory on the GPU)
 void matrix_multiplication_row_col_cuda(const float* A, const float* B, float* C, int M, int N, int K) {
     launch_matmul_rc_adavanced_kernel(A, B, C, M, N, K);
+}
+
+
+
+torch::Tensor matrix_multiplication(
+    const torch::Tensor& A,
+    const torch::Tensor& B, 
+    const bool transpose_B = false
+) { 
+    TORCH_CHECK(A.ndimension() == 2, "Input A must be 2D");
+    TORCH_CHECK(B.ndimension() == 2, "Input B must be 2D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "Input B must be of type float32");
+
+    auto options = A.options();
+    torch::Tensor C;
+
+    if (transpose_B) {
+        TORCH_CHECK(A.size(1) == B.size(1), "Input tensors must have compatible shapes");
+        int M = A.size(0), N = B.size(0), K = A.size(1);
+        C = torch::empty({M, N}, options);
+        matrix_multiplication_row_col_cuda(
+            A.data_ptr<float>(),
+            B.data_ptr<float>(),
+            C.data_ptr<float>(),
+            M, N, K
+        );
+        return C;
+    }
+    else {
+        TORCH_CHECK(A.size(1) == B.size(0), "Input tensors must have compatible shapes");
+        int M = A.size(0), N = B.size(1), K = A.size(1);
+        C = torch::empty({M, N}, options);
+
+        matrix_multiplication_cuda(
+            A.data_ptr<float>(),
+            B.data_ptr<float>(),
+            C.data_ptr<float>(),
+            M, N, K
+        );
+        return C;
+    }
 }

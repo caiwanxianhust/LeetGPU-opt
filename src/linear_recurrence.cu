@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include <assert.h>
+#include <torch/extension.h>
 
 
 /*
@@ -177,17 +178,6 @@ __global__ void scan_mul_add_across_block_thread(
     // 获取当前 batch 的起始索引
     int offset = batch_id * num_chunks;
 
-    // --- 串行 Exclusive Scan (Work-Efficient) ---
-    // 我们需要计算 exclusive prefix sum/product.
-    // 公式: 
-    //   out[0] = (1, 0)
-    //   out[i] = in[i-1] * out[i-1] (for product part of state) ... 
-    //   实际上我们要维护一个 running_state (P, S).
-    //   running_P = 1, running_S = 0 initially.
-    //   For i = 0 to num_chunks - 1:
-    //     1. Save current running state as the exclusive prefix for chunk i.
-    //     2. Update running state by combining with chunk i's local state (p_chunk[offset+i], s_chunk[offset+i]).
-    
     float running_p = 1.0f;
     float running_s = 0.0f;
 
@@ -412,4 +402,31 @@ void linear_recurrence_cuda(const float* a, const float* x, float* h, int B, int
     } else {
         linear_recurrence_scan_cuda(a, x, h, B, L);
     }
+}
+
+
+torch::Tensor linear_recurrence(
+    const torch::Tensor& a,
+    const torch::Tensor& x
+) {
+    TORCH_CHECK(a.ndimension() == 2, "a must be 2D");
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(a.size(0) == x.size(0), "The number of rows in a must match the number of rows in x");
+    TORCH_CHECK(a.size(1) == x.size(1), "The number of columns in a must match the number of columns in x");
+    TORCH_CHECK(a.device().is_cuda(), "a must be on CUDA");
+    TORCH_CHECK(x.device().is_cuda(), "x must be on CUDA");
+    TORCH_CHECK(a.dtype() == torch::kFloat32, "a must be of type float32");
+    TORCH_CHECK(x.dtype() == torch::kFloat32, "x must be of type float32");
+
+    int B = a.size(0);
+    int L = a.size(1);
+
+    torch::Tensor output = torch::empty_like(x);
+    linear_recurrence_cuda(
+        a.data_ptr<float>(),
+        x.data_ptr<float>(),
+        output.data_ptr<float>(),
+        B, L
+    );
+    return output;
 }

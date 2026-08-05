@@ -3,6 +3,7 @@
 #include <cuda.h>
 #include <cstdint>
 #include <mma.h>
+#include <torch/extension.h>
 
 
 
@@ -223,4 +224,37 @@ void int8_quantized_matmul_cuda(
     float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C) 
 {
     int8_quantized_matmul_warp_wmma_cuda(A, B, C, M, N, K, scale_A, scale_B, scale_C, zero_point_A, zero_point_B, zero_point_C);
+}
+
+
+torch::Tensor int8_quantized_matmul(
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    float scale_A, float scale_B, float scale_C,
+    int zero_point_A, int zero_point_B, int zero_point_C
+) {
+    TORCH_CHECK(A.ndimension() == 2, "Input A must be 2D");
+    TORCH_CHECK(B.ndimension() == 2, "Input B must be 2D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kInt8, "Input A must be of type int8");
+    TORCH_CHECK(B.dtype() == torch::kInt8, "Input B must be of type int8");
+    TORCH_CHECK(A.size(1) == B.size(0), "Input tensors must have compatible shapes");
+
+    int M = A.size(0);
+    int N = B.size(1);
+    int K = A.size(1);
+
+    auto options = A.options();
+    torch::Tensor C = torch::empty({M, N}, options.dtype(torch::kInt8));
+
+    int8_quantized_matmul_cuda(
+        A.data_ptr<int8_t>(),
+        B.data_ptr<int8_t>(),
+        C.data_ptr<int8_t>(),
+        M, N, K,
+        scale_A, scale_B, scale_C,
+        zero_point_A, zero_point_B, zero_point_C
+    );
+    return C;
 }

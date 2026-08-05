@@ -3,6 +3,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <mma.h>
+#include <torch/extension.h>
 
 
 /*
@@ -385,4 +386,29 @@ void batched_matrix_mul_fp16_cuda(const half* A, const half* B, half* C, int BAT
     // batched_matrix_mul_naive_fp16(A, B, C, BATCH, M, N, K);
     // batched_matrix_mul_warp_wmma_fp16(A, B, C, BATCH, M, N, K);
     wmma_matmul_fp16::launch_matmul_fp16_wmma_kernel(A, B, C, BATCH, M, N, K);
+}
+
+
+torch::Tensor batched_matrix_mul_fp16(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 3, "Input A must be 3D");
+    TORCH_CHECK(B.ndimension() == 3, "Input B must be 3D    ");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have compatible shapes");
+    TORCH_CHECK(A.size(2) == B.size(1), "Input tensors must have compatible shapes");
+    TORCH_CHECK(A.dtype() == torch::kFloat16, "Input A must be of type float16");
+    TORCH_CHECK(B.dtype() == torch::kFloat16, "Input B must be of type float16");
+
+    int BATCH = A.size(0), M = A.size(1), K = A.size(2), N = B.size(2);
+    torch::Tensor C = torch::empty({BATCH, M, N}, A.options());
+    batched_matrix_mul_fp16_cuda(
+        reinterpret_cast<half*>(A.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(C.data_ptr<at::Half>()),
+        BATCH, M, N, K
+    );
+    return C;
 }

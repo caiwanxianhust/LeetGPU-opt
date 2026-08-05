@@ -1,5 +1,6 @@
 #include "utils.cuh"
 #include <cuda.h>
+#include <torch/extension.h>
 
 /*
 Given a 2D grid of 32-bit floating point values, apply one iteration of the 5-point Jacobi stencil: each interior cell of the output is set to the average of its four cardinal neighbors (top, bottom, left, right) from the input grid. Boundary cells (first/last row and column) are copied unchanged from the input to the output.
@@ -55,4 +56,15 @@ void jacobi_stencil_2D_cuda(const float* input, float* output, int rows, int col
     dim3 block(tile_size, tile_size);
     dim3 grid(div_up(cols, tile_size), div_up(rows, tile_size));
     jacobi_stencil_2D_kernel<<<grid, block>>>(input, output, rows, cols);
+}
+
+
+torch::Tensor jacobi_stencil_2D(const torch::Tensor& input)
+{
+    int cols = input.size(1);
+    int rows = input.size(0);
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    torch::Tensor output = torch::empty_like(input);
+    jacobi_stencil_2D_cuda(input.data_ptr<float>(), output.data_ptr<float>(), rows, cols);
+    return output;
 }

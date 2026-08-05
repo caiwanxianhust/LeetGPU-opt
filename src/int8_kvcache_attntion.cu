@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <stdint.h>
+#include <torch/extension.h>
 
 
 static __host__ __device__ inline int div_up(int a, int b) {
@@ -171,4 +172,37 @@ void int8_kvcache_attntion_cuda(
     flash_attn::launch_int8_kvcache_flash_attntion_kernel(
         Q, K_int8, V_int8, k_scale, v_scale, output, num_heads, seq_len, head_dim);
 
+}
+
+
+torch::Tensor int8_kvcache_attntion(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    const torch::Tensor& k_scale,
+    const torch::Tensor& v_scale
+) {
+    TORCH_CHECK(Q.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(K.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(V.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(k_scale.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(v_scale.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(Q.device().is_cuda() && K.device().is_cuda() && V.device().is_cuda() && k_scale.device().is_cuda() && v_scale.device().is_cuda(), 
+        "Input must be on CUDA");
+    
+    int num_heads = Q.size(0);
+    int head_dim = Q.size(1);
+    int seq_len = K.size(1);
+    
+    torch::Tensor output = torch::zeros_like(Q);
+    int8_kvcache_attntion_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<int8_t>(),
+        V.data_ptr<int8_t>(),
+        k_scale.data_ptr<float>(),
+        v_scale.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_heads, seq_len, head_dim
+    );
+    return output;
 }

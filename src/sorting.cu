@@ -2,6 +2,7 @@
 
 #include <cfloat>
 #include <cub/cub.cuh>
+#include <torch/extension.h>
 
 /*
 Write a program that sorts an array of 32-bit floating-point numbers in ascending order. You are free to choose any sorting algorithm.
@@ -118,4 +119,12 @@ void sort_cub_cuda(float* data, int N) {
 void sort_cuda(float* data, int N) {
     bitonic_sort::sort_bitonic_cuda(data, N);
     // cub_sort::sort_cub_cuda(data, N);
+}
+
+
+void sorting(const torch::Tensor& input) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    sort_cuda(input.data_ptr<float>(), input.size(0));
+    return;
 }

@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement the forward pass of a State Space Model (SSM) selective scan, the core operation in Mamba-style sequence models. Given an input sequence u, time-step parameters delta, state-transition matrix A, input projection B, output projection C, and skip-connection weights skip, compute the output sequence y in float32.
@@ -145,4 +147,45 @@ void ssm_selective_scan_cuda(const float* u, const float* delta, const float* A,
     int d_model, int d_state) 
 {
     ssm_naive::ssm_selective_scan_naive(u, delta, A, B, C, skip, y, batch, seq_len, d_model, d_state);
+}
+
+
+torch::Tensor ssm_selective_scan(
+    const torch::Tensor& u,
+    const torch::Tensor& delta,
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    const torch::Tensor& C,
+    const torch::Tensor& skip
+) {
+    TORCH_CHECK(u.ndimension() == 3, "u must be 3D");
+    TORCH_CHECK(delta.ndimension() == 3, "delta must be 3D");
+    TORCH_CHECK(A.ndimension() == 2, "A must be 2D");
+    TORCH_CHECK(B.ndimension() == 3, "B must be 3D");
+    TORCH_CHECK(C.ndimension() == 3, "C must be 3D");
+    TORCH_CHECK(skip.ndimension() == 1, "skip must be 1D");
+
+    int batch = u.size(0);
+    int seq_len = u.size(1);
+    int d_model = u.size(2);
+    int d_state = A.size(1);
+
+    TORCH_CHECK(delta.size(0) == batch && delta.size(1) == seq_len && delta.size(2) == d_model, "delta must have the same shape as u");
+    TORCH_CHECK(A.size(0) == d_model, "A must have shape (d_model, d_state)");
+    TORCH_CHECK(B.size(0) == batch && B.size(1) == seq_len && B.size(2) == d_state, "B must have shape (batch, seq_len, d_state)");
+    TORCH_CHECK(C.size(0) == batch && C.size(1) == seq_len && C.size(2) == d_state, "C must have shape (batch, seq_len, d_state)");
+    TORCH_CHECK(skip.size(0) == d_model, "skip must have shape (d_model)");
+
+    torch::Tensor output = torch::empty_like(u);
+    ssm_selective_scan_cuda(
+        u.data_ptr<float>(),
+        delta.data_ptr<float>(),
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        skip.data_ptr<float>(),
+        output.data_ptr<float>(),
+        batch, seq_len, d_model, d_state
+    );
+    return output;
 }

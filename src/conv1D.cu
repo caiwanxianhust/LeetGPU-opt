@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 1D Convolution
@@ -65,4 +67,28 @@ void convolution_1d_cuda(const float* input, const float* kernel, float* output,
 
     convolution_1d_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, kernel, output, input_size, kernel_size);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor convolution_1D(
+    const torch::Tensor& input,
+    const torch::Tensor& kernel
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(kernel.ndimension() == 1, "Kernel must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(kernel.device().is_cuda(), "Kernel must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(kernel.dtype() == torch::kFloat32, "Kernel must be of type float32");
+    TORCH_CHECK(input.size(0) >= kernel.size(0), "Input must be longer than kernel");
+    int input_size = input.size(0), kernel_size = kernel.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({input_size - kernel_size + 1}, options);
+    convolution_1d_cuda(
+        input.data_ptr<float>(),
+        kernel.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input_size, kernel_size
+    );
+    return output;
 }

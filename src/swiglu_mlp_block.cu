@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 namespace gemm_pipline {
 
@@ -255,4 +257,39 @@ void swiglu_mlp_block_gemm_pipeline_cuda(
 void swiglu_mlp_block_cuda(const float* x, const float* W_gate, const float* W_up, const float* W_down,
     float* output, int M, int d_model, int d_ffn) {
     gemm_pipline::swiglu_mlp_block_gemm_pipeline_cuda(x, W_gate, W_up, W_down, output, M, d_model, d_ffn);
+}
+
+
+torch::Tensor swiglu_mlp_block(
+    const torch::Tensor& x,
+    const torch::Tensor& W_gate,
+    const torch::Tensor& W_up,
+    const torch::Tensor& W_down
+) {
+    TORCH_CHECK(x.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(W_gate.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(W_up.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(W_down.ndimension() == 2, "Input must be 2D");
+    // 校验 d_model
+    TORCH_CHECK(x.size(1) == W_gate.size(0) && x.size(1) == W_up.size(0) && x.size(1) == W_down.size(1), 
+        "The ndimension of d_model must match");
+    // 校验 d_ffn
+    TORCH_CHECK(W_up.size(1) == W_gate.size(1) && W_gate.size(1) == W_down.size(0), 
+        "The ndimension of d_ffn must match");
+    int M = x.size(0);
+    int d_model = x.size(1);
+    int d_ffn = W_gate.size(1);
+
+    // torch::Tensor output = torch::zeros_like(x);
+    torch::Tensor output = torch::zeros({M, d_model}, x.options());
+    swiglu_mlp_block_cuda(
+        x.data_ptr<float>(),
+        W_gate.data_ptr<float>(),
+        W_up.data_ptr<float>(),
+        W_down.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, d_model, d_ffn
+    );
+
+    return output;
 }

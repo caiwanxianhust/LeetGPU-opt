@@ -1,6 +1,7 @@
 #include "utils.cuh"
-
 #include "cuda_kernels.cuh"
+
+#include <torch/extension.h>
 
 /**
 Write a GPU program that performs parallel reduction on an array of 32-bit floating point numbers to compute their sum. The program should take an input array and produce a single output value containing the sum of all elements.
@@ -21,39 +22,8 @@ Constraints
 The final sum will always fit within a 32-bit float
  */
 
-// __device__ float warp_all_reduce_sum(float val) {
-//     #pragma unroll
-//     for (int mask=16; mask > 0; mask >>= 1) {
-//         val += __shfl_xor_sync(0xffffffff, val, mask);
-//     }
-//     return val;
-// }
 
-
-// __device__ float block_all_reduce_sum(float val) {
-//     int warp_id = threadIdx.x >> 5;
-//     int lane_id = threadIdx.x & 0x1f;
-
-//     __shared__ float result;
-//     __shared__ float s_buf[32];
-
-//     val = warp_all_reduce_sum(val);
-//     if (lane_id == 0) {
-//         s_buf[warp_id] = val;
-//     }
-//     __syncthreads();
-
-//     val = threadIdx.x < (blockDim.x >> 5) ? s_buf[threadIdx.x] : 0.0f;
-//     val = warp_all_reduce_sum(val);
-//     if (threadIdx.x == 0) {
-//         result = val;
-//     }
-//     __syncthreads();
-//     return result;
-// }
-
-
-__global__ void reduce_sum_kernel(const float* input, float* output, int N) {
+static __global__ void reduce_sum_kernel(const float* input, float* output, int N) {
 
     float vsum = 0.0f;
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -85,4 +55,20 @@ void reduce_sum_cuda(const float* input, float* output, int N) {
 
     reduce_sum_kernel<<<grid_size, block_size>>>(input, output, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor reduce_sum(
+    const torch::Tensor& input
+) { 
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    torch::Tensor output = torch::zeros({1}, input.options());
+    reduce_sum_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input.size(0)
+    );
+    return output;
 }

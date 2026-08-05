@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cfloat>
+#include <torch/extension.h>
 
 
 /*
@@ -217,4 +218,23 @@ void fast_fft_cuda(const float* signal, float* spectrum, int N)
 {
     fft_radix2::fft_radix2_cuda(signal, spectrum, N);
 
+}
+
+
+torch::Tensor fast_fft(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(input.size(0) % 2 == 0, "Input size must be even");
+
+    int N = input.size(0) / 2;
+    torch::Tensor output = torch::empty_like(input);
+    fast_fft_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
 }

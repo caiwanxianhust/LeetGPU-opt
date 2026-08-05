@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <cfloat>
+#include <torch/extension.h>
 
 /*
 Implement Attention with Linear Biases (ALiBi), following the method described in "Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation" , for a given set of matrices. Given the query matrix Q of size M×d, key matrix K of size N×d, and value matrix V of size N×d, your program should compute the output matrix using the formula:
@@ -623,4 +624,37 @@ void attention_with_linear_bias_cuda(const float* Q, const float* K, const float
 
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_CUDA_ERROR(cudaFree(buf));
+}
+
+
+torch::Tensor attention_with_linear_bias(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    float alpha
+) { 
+    TORCH_CHECK(Q.ndimension() == 2, "Input Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "Input K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "Input V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Input Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "Input K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "Input V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Input Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "Input K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "Input V must be of type float32");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Input tensors must have compatible shapes");
+    TORCH_CHECK(V.size(1) == K.size(1), "Input tensors must have compatible shapes");
+    TORCH_CHECK(K.size(0) == V.size(0), "Input tensors must have compatible shapes");
+    int M = Q.size(0), N = K.size(0), d = Q.size(1);
+    auto options = Q.options();
+    torch::Tensor output = torch::empty({M, d}, options);
+    attention_with_linear_bias_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, N, d,
+        alpha
+    );
+    return output;
 }

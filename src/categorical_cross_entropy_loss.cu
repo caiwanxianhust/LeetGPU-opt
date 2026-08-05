@@ -1,6 +1,8 @@
 #include "utils.cuh"
 #include "cuda_kernels.cuh"
 
+#include <torch/extension.h>
+
 
 /**
 Implement a GPU program to calculate the categorical cross-entropy loss for a batch of predictions. Given a matrix of predicted logits 
@@ -86,4 +88,28 @@ void avg_categorical_cross_entropy_loss_cuda(
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
     // Free temporary memory
     CHECK_CUDA_ERROR(cudaFree(tmp_loss));
+}
+
+
+torch::Tensor avg_categorical_cross_entropy_loss(
+    const torch::Tensor& logits,
+    const torch::Tensor& true_labels,
+    int N, int C
+) {
+    TORCH_CHECK(logits.ndimension() == 1, "Input logits must be 1D");
+    TORCH_CHECK(true_labels.ndimension() == 1, "Input true_labels must be 1D");
+    TORCH_CHECK(logits.device().is_cuda(), "Input logits must be on CUDA");
+    TORCH_CHECK(true_labels.device().is_cuda(), "Input true_labels must be on CUDA");
+    TORCH_CHECK(logits.dtype() == torch::kFloat32, "Input logits must be of type float32");
+    TORCH_CHECK(true_labels.dtype() == torch::kInt32, "Input true_labels must be of type int32");
+    TORCH_CHECK(logits.size(0) == N * C, "Input logits must be a 1D matrix")
+    TORCH_CHECK(true_labels.size(0) == N, "Input true_labels must be a 1D matrix")
+    torch::Tensor loss = torch::empty({1}, logits.options());
+    avg_categorical_cross_entropy_loss_cuda(
+        logits.data_ptr<float>(),
+        true_labels.data_ptr<int>(),
+        loss.data_ptr<float>(),
+        N, C
+    );
+    return loss;
 }

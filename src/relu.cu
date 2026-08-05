@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a program that performs the Rectified Linear Unit (ReLU) activation function on a vector of 32-bit floating point numbers. The ReLU function sets all negative values to zero and leaves positive values unchanged:
@@ -32,4 +34,23 @@ void relu_cuda(const float* input, float* output, int N) {
 
     relu_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+
+torch::Tensor relu(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+    relu_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
 }

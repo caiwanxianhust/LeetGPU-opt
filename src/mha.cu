@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 namespace {
     constexpr int TILE_SIZE = 16;
@@ -619,4 +620,42 @@ void mha_cuda(const float* Q, const float* K, const float* V, float* output, int
 {
     // mha_naive::mha_naive_cuda(Q, K, V, output, N, d_model, h);
     mha_matmul_pipeline::mha_matmul_pipeline_cuda(Q, K, V, output, N, d_model, h);
+}
+
+
+torch::Tensor mha(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V,
+    const int heads
+) { 
+    TORCH_CHECK(Q.ndimension() == 2, "Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.size(0) == K.size(0), "Q and K must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Q and K must have the same number of columns");
+    TORCH_CHECK(Q.size(0) == V.size(0), "Q and V must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == V.size(1), "Q and V must have the same number of columns");
+    TORCH_CHECK(Q.size(1) % heads == 0, "Q size must be divisible by heads");
+
+    int N = Q.size(0);
+    int d_model = Q.size(1);
+    
+    torch::Tensor output = torch::zeros({N, d_model}, Q.options());
+    torch::Tensor attn_scores = torch::zeros({heads, N, N}, Q.options());
+    mha_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, d_model, heads
+    );
+
+    return output;
 }

@@ -1,29 +1,9 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 /*
 Implement the SiLU (Sigmoid Linear Unit) activation function forward pass for 1D input vectors. Given an input tensor of shape [N] where N is the number of elements, compute the output using the elementwise formula.
-
-SiLU is defined as:
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
 
 Implementation Requirements
 Use only native features (external libraries are not permitted)
@@ -61,3 +41,20 @@ void silu_cuda(const float* input, float* output, int N) {
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
 
+
+torch::Tensor silu(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+    silu_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
+}

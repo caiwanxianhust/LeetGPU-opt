@@ -3,6 +3,7 @@
 
 #include <cuda_fp16.h>
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -82,4 +83,31 @@ void dot_product_fp16_cuda(const half* A, const half* B, half* result, int N) {
     reduce_sum_fp16_kernel<<<1, 1024>>>(block_sums, result, num_blocks);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_CUDA_ERROR(cudaFree(block_sums));
+}
+
+
+torch::Tensor dot_product_fp16(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 1, "Input A must be 1D");
+    TORCH_CHECK(B.ndimension() == 1, "Input B must be 1D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat16, "Input A must be of type float16");
+    TORCH_CHECK(B.dtype() == torch::kFloat16, "Input B must be of type float16");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have the same size");
+
+    int N = A.size(0);
+    auto options = A.options();
+    torch::Tensor result = torch::zeros({1}, options.dtype(torch::kFloat16));
+
+    dot_product_fp16_cuda(
+        reinterpret_cast<const half*>(A.data_ptr<at::Half>()),
+        reinterpret_cast<const half*>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(result.data_ptr<at::Half>()),
+        N
+    );
+
+    return result;
 }

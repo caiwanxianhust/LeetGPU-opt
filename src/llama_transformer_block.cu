@@ -3,7 +3,7 @@
 
 #include <assert.h>
 #include <cfloat>
-
+#include <torch/extension.h>
 
 
 namespace {
@@ -686,4 +686,28 @@ void llama_transformer_block_cuda(
 
     CHECK_CUDA_ERROR(cudaFree(d_buf));
 
+}
+
+
+torch::Tensor llama_transformer_block(
+    const torch::Tensor& x,
+    const torch::Tensor& weights,
+    const torch::Tensor& cos,
+    const torch::Tensor& sin
+) {
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(weights.ndimension() == 1, "weights must be 1D");
+
+    int seq_len = x.size(0);
+    int d_model = x.size(1);
+    torch::Tensor output = torch::empty({seq_len, d_model}, x.options());
+    llama_transformer_block_cuda(
+        x.data_ptr<float>(),
+        output.data_ptr<float>(),
+        weights.data_ptr<float>(),
+        cos.data_ptr<float>(),
+        sin.data_ptr<float>(),
+        seq_len
+    );
+    return output;
 }

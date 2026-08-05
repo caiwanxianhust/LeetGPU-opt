@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -86,4 +87,30 @@ void mean_squared_error_cuda(
     mean_reduce_kernel<<<1, 1024>>>(diff_squared, mse, grid_size);
     CHECK_CUDA_ERROR(cudaFree(diff_squared));
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor mse_vec(
+    const torch::Tensor& predictions,
+    const torch::Tensor& targets
+) {
+    TORCH_CHECK(predictions.ndimension() == 1, "Input predictions must be 1D");
+    TORCH_CHECK(targets.ndimension() == 1, "Input targets must be 1D");
+    TORCH_CHECK(predictions.device().is_cuda(), "Input predictions must be on CUDA");
+    TORCH_CHECK(targets.device().is_cuda(), "Input targets must be on CUDA");
+    TORCH_CHECK(predictions.dtype() == torch::kFloat32, "Input predictions must be of type float32");
+    TORCH_CHECK(targets.dtype() == torch::kFloat32, "Input targets must be of type float32");
+    TORCH_CHECK(predictions.size(0) == targets.size(0), "Input tensors must have the same size");
+    
+    int N = predictions.size(0);
+    torch::Tensor mse = torch::empty({1}, predictions.options());
+    
+    mean_squared_error_cuda(
+        predictions.data_ptr<float>(),
+        targets.data_ptr<float>(),
+        mse.data_ptr<float>(),
+        N
+    );
+    
+    return mse;
 }

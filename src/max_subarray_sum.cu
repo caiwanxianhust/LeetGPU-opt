@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -76,4 +77,26 @@ void max_subarray_sum_cuda(const int* input, int* output, int N, int window_size
     reduce_max_kernel<<<1, 1024>>>(d_buf, output, num_blocks);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_CUDA_ERROR(cudaFree(d_buf));
+}
+
+
+torch::Tensor max_subarray_sum(
+    const torch::Tensor& input,
+    const int window_size
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(window_size > 0 && window_size <= input.size(0), "Invalid window size");
+
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({1}, options);
+    max_subarray_sum_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        N,
+        window_size
+    );
+    return output;
 }

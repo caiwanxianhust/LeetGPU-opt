@@ -2,6 +2,7 @@
 
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /* 
@@ -270,4 +271,45 @@ void lora_linear_cuda(const float* x, const float* W, const float* A, const floa
     launch_vector_add_scale_kernel(xw, xab, output, batch * d_out, lora_scale);
     
     CHECK_CUDA_ERROR(cudaFree(d_buf));
+}
+
+
+torch::Tensor lora_linear(
+    const torch::Tensor& x,
+    const torch::Tensor& W,
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    float lora_scale
+) { 
+    int batch = x.size(0);
+    int d_in = x.size(1);
+    int d_out = W.size(0);
+    int rank = A.size(0);
+    TORCH_CHECK(x.ndimension() == 2, "x must be 2D");
+    TORCH_CHECK(W.ndimension() == 2, "W must be 2D");
+    TORCH_CHECK(A.ndimension() == 2, "A must be 2D");
+    TORCH_CHECK(B.ndimension() == 2, "B must be 2D");
+    TORCH_CHECK(x.device().is_cuda(), "x must be on CUDA");
+    TORCH_CHECK(W.device().is_cuda(), "W must be on CUDA"); 
+    TORCH_CHECK(A.device().is_cuda(), "A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "B must be on CUDA");
+    TORCH_CHECK(x.dtype() == torch::kFloat32, "x must be of type float32");
+    TORCH_CHECK(W.dtype() == torch::kFloat32, "W must be of type float32");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "A must be of type float32");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "B must be of type float32");
+    TORCH_CHECK(x.size(1) == W.size(1), "The number of columns in x must match the number of columns in W");
+    TORCH_CHECK(x.size(1) == A.size(1), "The number of columns in x must match the number of columns in A");
+    TORCH_CHECK(W.size(0) == B.size(0), "The number of rows in W must match the number of rows in B");
+    TORCH_CHECK(A.size(0) == B.size(1), "The number of rows in A must match the number of columns in B");
+
+    torch::Tensor output = torch::empty({batch, d_out}, x.options());
+    lora_linear_cuda(
+        x.data_ptr<float>(),
+        W.data_ptr<float>(),
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        output.data_ptr<float>(),
+        batch, d_in, d_out, rank, lora_scale
+    );
+    return output;
 }

@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 /* 
 Implement Monte Carlo integration on a GPU. Given a set of function values 
@@ -71,4 +72,23 @@ void monte_carlo_integration_cuda(const float* y_samples, float* result, float a
 
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_CUDA_ERROR(cudaFree(d_result_in_block));
+}
+
+
+torch::Tensor monte_carlo_integration(
+    const torch::Tensor& y_samples,
+    float a, float b
+) {
+    TORCH_CHECK(y_samples.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(y_samples.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(y_samples.dtype() == torch::kFloat32, "Input must be of type float32");
+
+    int N = y_samples.size(0);
+    torch::Tensor result = torch::empty({1}, y_samples.options());
+    monte_carlo_integration_cuda(
+        y_samples.data_ptr<float>(),
+        result.data_ptr<float>(),
+        a, b, N
+    );
+    return result;
 }

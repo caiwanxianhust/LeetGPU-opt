@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a causal depthwise 1D convolution over a batched sequence tensor x of shape (B, L, D), producing an output of the same shape. In a depthwise convolution, each channel d is convolved independently using its own kernel weight[d, :] — there is no mixing across channels. The convolution is causal: output position l may only depend on input positions 0, 1, …, l (past and present), never future positions. This operation is a key component of state-space models such as Mamba, where it is applied before the selective scan to mix local context within each feature channel.
@@ -154,5 +156,37 @@ void causal_depthwise_conv1D_cuda(const float* x, const float* weight, const flo
     // naive::launch_causal_depthwise_conv1D_naive(x, weight, bias, output, B, L, D, K);
     r87::launch_causal_depthwise_conv1d_kernel(x, weight, bias, output, B, L, D, K);
 }
+
+
+torch::Tensor causal_depthwise_conv1D(
+    const torch::Tensor& x,
+    const torch::Tensor& weight,
+    const torch::Tensor& bias
+) {
+    TORCH_CHECK(x.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(weight.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(bias.ndimension() == 1, "Input must be 1D");
+
+    // 校验 D
+    TORCH_CHECK(x.size(2) == weight.size(0) && x.size(2) == bias.size(0), "The ndimension of d_ffn must match");
+
+    int B = x.size(0);
+    int L = x.size(1);
+    int D = x.size(2);
+    int K = weight.size(1);
+
+    torch::Tensor output = torch::zeros_like(x);
+
+    causal_depthwise_conv1D_cuda(
+        x.data_ptr<float>(),
+        weight.data_ptr<float>(),
+        bias.data_ptr<float>(),
+        output.data_ptr<float>(),
+        B, L, D, K
+    );
+
+    return output;
+}
+
 
 

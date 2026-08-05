@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 /*
 Solve the logistic regression problem on a GPU. Given a feature matrix 
@@ -180,4 +181,30 @@ void logistic_regression_cuda(const float* X, const float* y, float* beta, int n
     }
     
     CHECK_CUDA_ERROR(cudaFree(d_buf));
+}
+
+
+torch::Tensor logistic_regression(
+    const torch::Tensor& X,
+    const torch::Tensor& y,
+    const torch::Tensor& beta
+) { 
+    TORCH_CHECK(X.ndimension() == 2, "Input X must be 2D");
+    TORCH_CHECK(y.ndimension() == 1, "Input y must be 1D");
+    TORCH_CHECK(beta.ndimension() == 1, "Input beta must be 1D");
+    TORCH_CHECK(X.device().is_cuda(), "Input X must be on CUDA");
+    TORCH_CHECK(y.device().is_cuda(), "Input y must be on CUDA");
+    TORCH_CHECK(beta.device().is_cuda(), "Input beta must be on CUDA");
+    TORCH_CHECK(X.dtype() == torch::kFloat32, "Input X must be of type float32");
+    TORCH_CHECK(y.dtype() == torch::kFloat32, "Input y must be of type float32");
+    TORCH_CHECK(beta.dtype() == torch::kFloat32, "Input beta must be of type float32");
+    TORCH_CHECK(X.size(0) == y.size(0), "Input tensors must have the same size");
+    TORCH_CHECK(X.size(1) == beta.size(0), "Input tensors must have compatible shapes");
+    logistic_regression_cuda(
+        X.data_ptr<float>(),
+        y.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        X.size(0), X.size(1)
+    );
+    return beta;
 }

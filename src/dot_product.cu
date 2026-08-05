@@ -1,6 +1,8 @@
 #include "utils.cuh"
 #include "cuda_kernels.cuh"
 
+#include <torch/extension.h>
+
 
 /**
 Implement a GPU program that computes the dot product of two vectors containing 32-bit floating point numbers. The dot product is the sum of the products of the corresponding elements of two vectors.
@@ -57,4 +59,31 @@ void dot_product_cuda(float* A, float* B, float* result, int N) {
     }
     dot_product_kernel<<<grid_size, block_size>>>(A, B, result, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor dot_product(
+    const torch::Tensor& A,
+    const torch::Tensor& B
+) {
+    TORCH_CHECK(A.ndimension() == 1, "Input A must be 1D");
+    TORCH_CHECK(B.ndimension() == 1, "Input B must be 1D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
+    TORCH_CHECK(B.dtype() == torch::kFloat32, "Input B must be of type float32");
+    TORCH_CHECK(A.size(0) == B.size(0), "Input tensors must have the same size");
+    
+    int N = A.size(0);
+    auto options = A.options();
+    torch::Tensor result = torch::zeros({1}, options);
+    
+    dot_product_cuda(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        result.data_ptr<float>(),
+        N
+    );
+    
+    return result;
 }

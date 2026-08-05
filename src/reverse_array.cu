@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Reverse Array
@@ -40,4 +42,19 @@ void reverse_array_cuda(float* input, int N) {
 
     reverse_array_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, N);
     cudaDeviceSynchronize();
+}
+
+
+void reverse_array(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    reverse_array_cuda(
+        input.data_ptr<float>(),
+        N
+    );
+    return;
 }

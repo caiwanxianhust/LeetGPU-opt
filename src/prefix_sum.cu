@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Write a GPU program that computes the prefix sum (cumulative sum) of an array of 32-bit floating point numbers. For an input array [a, b, c, d, ...], the prefix sum is [a, a+b, a+b+c, a+b+c+d, ...].
@@ -65,4 +67,23 @@ void prefix_sum_cuda(float* input, float* output, float* reduce_sum_output, int 
     prefix_sum_in_block_kernel<<<grid_size, block_size>>>(input, output, reduce_sum_output, N);
     add_reduce_sum_kernel<<<grid_size, block_size>>>(output, reduce_sum_output, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor prefix_sum(
+    const torch::Tensor& input
+) { 
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    torch::Tensor output = torch::empty({N}, input.options());
+    torch::Tensor reduce_sum_output = torch::empty({N}, input.options());
+    prefix_sum_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        reduce_sum_output.data_ptr<float>(),
+        N
+    );
+    return output;
 }

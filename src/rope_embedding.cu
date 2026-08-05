@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -50,4 +51,41 @@ __global__ void rope_kernel(const float* Q, const float* cos, const float* sin, 
 void rope_embedding_cuda(float* Q, float* cos, float* sin, float* output, int M, int D) {
     rope_kernel<<<M, 256>>>(Q, cos, sin, output, M, D);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor rope_embedding(
+    const torch::Tensor& input,
+    const torch::Tensor& cos_table,
+    const torch::Tensor& sin_table
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(cos_table.ndimension() == 2, "cos_table must be 2D");
+    TORCH_CHECK(sin_table.ndimension() == 2, "sin_table must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(cos_table.device().is_cuda(), "cos_table must be on CUDA");
+    TORCH_CHECK(sin_table.device().is_cuda(), "sin_table must be on CUDA");
+    TORCH_CHECK(input.size(0) == cos_table.size(0), "Input and cos_table must have the same number of rows");
+    TORCH_CHECK(input.size(0) == sin_table.size(0), "Input and sin_table must have the same number of rows");
+    TORCH_CHECK(input.size(1) == cos_table.size(1), "Input and cos_table must have the same number of columns");
+    TORCH_CHECK(input.size(1) == sin_table.size(1), "Input and sin_table must have the same number of columns");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(cos_table.dtype() == torch::kFloat32, "cos_table must be of type float32");
+    TORCH_CHECK(sin_table.dtype() == torch::kFloat32, "sin_table must be of type float32");
+    TORCH_CHECK(input.size(1) % 2 == 0, "input must have an even number of columns");
+
+    int M = input.size(0);
+    int D = input.size(1);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({M, D}, options);
+
+    rope_embedding_cuda(
+        input.data_ptr<float>(),
+        cos_table.data_ptr<float>(),
+        sin_table.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, D
+    );
+    
+    return output;
 }

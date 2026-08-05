@@ -3,7 +3,7 @@
 
 #include <cuda.h>
 #include <cfloat>
-
+#include <torch/extension.h>
 
 /*
 Implement the k-means clustering algorithm for 2D points. Given arrays of x and y coordinates for data points, initial centroids, and other parameters, assign each point to the nearest centroid and update the centroids iteratively. The final centroids and labels should be stored in the output arrays.
@@ -177,4 +177,47 @@ void kmeans_clustering_cuda(const float* data_x, const float* data_y, int* label
     CHECK_CUDA_ERROR(cudaMemcpy(final_centroid_y, initial_centroid_y, k * sizeof(float),
                                 cudaMemcpyDeviceToDevice));
     CHECK_CUDA_ERROR(cudaFree(d_buf));
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> kmeans_clustering(
+    const torch::Tensor& data_x,
+    const torch::Tensor& data_y,
+    const torch::Tensor& init_centroids_x,
+    const torch::Tensor& init_centroids_y,
+    const int max_iterations
+) { 
+    TORCH_CHECK(data_x.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(data_y.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(init_centroids_x.ndimension() == 1, "init_centroids_x must be 1D");
+    TORCH_CHECK(init_centroids_y.ndimension() == 1, "init_centroids_y must be 1D");
+    TORCH_CHECK(data_x.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(data_y.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(init_centroids_y.device().is_cuda(), "init_centroids_y must be on CUDA");
+    TORCH_CHECK(init_centroids_x.device().is_cuda(), "init_centroids_x must be on CUDA");
+    TORCH_CHECK(data_x.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(data_y.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(init_centroids_x.dtype() == torch::kFloat32, "init_centroids_x must be of type float32");
+    TORCH_CHECK(init_centroids_y.dtype() == torch::kFloat32, "init_centroids_y must be of type float32");
+
+    int sample_size = data_x.size(0);
+    int k = init_centroids_x.size(0);
+    TORCH_CHECK(sample_size > k, "Sample size must be greater than number of clusters");
+    TORCH_CHECK(data_y.size(0) == sample_size, "Input must have the same number of rows as init_centroids_y");
+    TORCH_CHECK(init_centroids_y.size(0) == k, "init_centroids_y must have the same number of rows as init_centroids_x");
+
+    torch::Tensor labels = torch::empty({sample_size}, data_x.options().dtype(torch::kInt32));
+    torch::Tensor final_centroids_x = torch::empty({k}, data_x.options());
+    torch::Tensor final_centroids_y = torch::empty({k}, data_x.options());
+    kmeans_clustering_cuda(
+        data_x.data_ptr<float>(), 
+        data_y.data_ptr<float>(), 
+        labels.data_ptr<int>(), 
+        init_centroids_x.data_ptr<float>(),
+        init_centroids_y.data_ptr<float>(),
+        final_centroids_x.data_ptr<float>(),
+        final_centroids_y.data_ptr<float>(),
+        sample_size, k, max_iterations
+    );
+    return {labels, final_centroids_x, final_centroids_y};
 }

@@ -2,6 +2,7 @@
 
 #include <cuda.h>
 #include <cfloat>
+#include <torch/extension.h>
 
 /*
 Implement a 2D max pooling operation for image/feature map downsampling. The program should take an input tensor and produce an output tensor by applying max pooling with specified kernel size, stride, and padding.
@@ -99,4 +100,32 @@ void max_pooling_2D_cuda(const float* input, float* output,
     max_pooling_2D_kernel<<<grid, block>>>(input, output, N, C, H, W, H_out, W_out, kernel_size, stride, padding);
     CHECK_CUDA_ERROR(cudaGetLastError());
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor max_pooling_2D(
+    const torch::Tensor& input,
+    int kernel_size,
+    int stride,
+    int padding
+) { 
+    TORCH_CHECK(input.ndimension() == 4, "Input must be 4D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32")
+
+    int N = input.size(0);
+    int C = input.size(1);
+    int H = input.size(2);
+    int W = input.size(3);
+    int H_out = (H + 2 * padding - kernel_size) / stride + 1;
+    int W_out = (W + 2 * padding - kernel_size) / stride + 1;
+    torch::Tensor output = torch::empty({N, C, H_out, W_out}, input.options());
+
+    max_pooling_2D_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, C, H, W,
+        kernel_size, stride, padding
+    );
+    return output;
 }

@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -97,4 +98,14 @@ void stream_compaction_cuda(const float* A, int N, float* out)
     scan_kernel<<<1, 1024>>>(d_block_cnt, grid_size, d_idx_off);
     // 拷贝非零元素
     stream_compaction_kernel<<<1, 1024>>>(A, N, out, d_idx_off, nums_per_block);
+}
+
+
+torch::Tensor stream_compaction(const torch::Tensor& input)
+{
+    int N = input.size(0);
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    torch::Tensor output = torch::zeros_like(input);
+    stream_compaction_cuda(input.data_ptr<float>(), N, output.data_ptr<float>());
+    return output;
 }

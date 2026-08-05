@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 /*
 Write a program that transposes a matrix of 32-bit floating point numbers on a GPU. The transpose of a matrix switches its rows and columns. Given a matrix 
  of dimensions 
@@ -46,4 +48,22 @@ void matrix_transpose_cuda(const float* input, float* output, int rows, int cols
 
     matrix_transpose_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, rows, cols);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor matrix_transpose(
+    const torch::Tensor& input
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int rows = input.size(0), cols = input.size(1);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({cols, rows}, options);
+    matrix_transpose_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        rows, cols
+    );
+    return output;
 }

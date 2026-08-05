@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include <cufft.h>
+#include <torch/extension.h>
 
 /*
 Compute the 2D Discrete Fourier Transform (2D DFT) of a complex-valued signal stored on the GPU. Given a 2D complex input signal of shape M × N, compute its 2D DFT spectrum using the row-column decomposition: apply a 1D DFT along each row, then a 1D DFT along each column of the result. All values are 32-bit floating point.
@@ -328,4 +329,23 @@ void fft_2D_cufft_cuda(const float* signal, float* spectrum, int M, int N) {
 void fft_2D_cuda(const float* signal, float* spectrum, int M, int N) {
     // reBourne87::fft_2D_reBourne87_cuda(signal, spectrum, M, N);
     cufft_api::fft_2D_cufft_cuda(signal, spectrum, M, N);
+}
+
+
+torch::Tensor fft_2D(
+    const torch::Tensor& input
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+
+    int rows = input.size(0);
+    int cols = input.size(1);
+    torch::Tensor output = torch::empty_like(input);
+    fft_2D_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        rows, (cols / 2)
+    );
+    return output;
 }

@@ -2,6 +2,7 @@
 
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 /*
 Implement a GPU program that "dequantizes" a weight matrix on the GPU. You are given an input matrix X of shape [M, N] containing quantized values and a scale matrix S of shape [ceil(M/T), ceil(N/T)], where T is the tile size.
@@ -75,4 +76,32 @@ void weight_dequantization_cuda(const float* X, const float* S, float* Y, int M,
     dim3 grid(div_up(N, 16), div_up(M, 16));
     dequantize_kernel<<<grid, block>>>(M, N, TILE_SIZE, X, S, Y);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor weight_dequantization(
+    const torch::Tensor& X,
+    const torch::Tensor& S, 
+    const int tile_size
+) {
+    TORCH_CHECK(X.ndimension() == 2, "X must be 2D");
+    TORCH_CHECK(S.ndimension() == 2, "S must be 2D");
+    TORCH_CHECK(X.device().is_cuda(), "X must be on CUDA");
+    TORCH_CHECK(S.device().is_cuda(), "S must be on CUDA");
+    TORCH_CHECK(X.dtype() == torch::kFloat32, "X must be of type float32");
+    TORCH_CHECK(S.dtype() == torch::kFloat32, "S must be of type float32");
+    int M = X.size(0);
+    int N = X.size(1);
+    TORCH_CHECK(((M + tile_size - 1) / tile_size) == S.size(0), "Invalid shape for S");
+    TORCH_CHECK(((N + tile_size - 1) / tile_size) == S.size(1), "Invalid shape for S");
+
+    torch::Tensor output = torch::empty({M, N}, X.options());
+
+    weight_dequantization_cuda(
+        X.data_ptr<float>(),
+        S.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, N, tile_size
+    );
+    return output;
 }

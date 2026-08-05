@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -87,46 +88,187 @@ __global__ void mv_kernel(const float * phi_q, const float* ksum, float* output,
     }
 }
 
-__global__ void matmul_kernel(const float* A, const float* B, float* C, int M, int N, int K) { 
-    int tx = threadIdx.x % TILE_SIZE;
-    int ty = threadIdx.x / TILE_SIZE;
-    int row_c = blockIdx.y * TILE_SIZE + ty;
-    int col_c = blockIdx.x * TILE_SIZE + tx;
+namespace {
+// 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
+#define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])
 
-    __shared__ float s_a[TILE_SIZE * TILE_SIZE];
-    __shared__ float s_b[TILE_SIZE * TILE_SIZE];
+// 定义宏，用于将 float 数组强制转换为 float2 类型，实现向量化访问
+#define FLOAT2(x) (reinterpret_cast<float2 *>(&(x))[0])
 
-    float acc = 0.0f;
+// --- 核心配置参数 ---
+constexpr int BLOCK_M = 128;      // Block 在 M 维度（行）处理的大小
+constexpr int BLOCK_N = 128;      // Block 在 N 维度（列）处理的大小
+constexpr int BLOCK_K = 8;        // Block 在 K 维度（深度）处理的大小
+constexpr int BLOCK_SIZE = 256;   // 每个 Block 的线程总数
 
-    for (int k = 0; k < K; k += TILE_SIZE) {
-        // Load A and B tiles into shared memory
-        for (int i = threadIdx.x; i < TILE_SIZE * TILE_SIZE; i += blockDim.x) {
-            int row_a = i / TILE_SIZE + blockIdx.y * TILE_SIZE;
-            int col_a = i % TILE_SIZE + k;
-            s_a[i] = (row_a < M && col_a < K) ? A[row_a * K + col_a] : 0.0f;
-        }
+// --- 线程布局配置 (这是该 Kernel 最精妙的部分) ---
+// A 矩阵加载时的线程布局：8列 x 32行
+constexpr int THREAD_A_LAYOUT_X = 8;
+constexpr int THREAD_A_LAYOUT_Y = BLOCK_SIZE / THREAD_A_LAYOUT_X; // 32
 
-        for (int i = threadIdx.x; i < TILE_SIZE * TILE_SIZE; i += blockDim.x) {
-            int row_b = i / TILE_SIZE + k;
-            int col_b = i % TILE_SIZE + blockIdx.x * TILE_SIZE;
-            s_b[i] = (row_b < K && col_b < N) ? B[row_b * N + col_b] : 0.0f;
-        }
+// B 矩阵加载时的线程布局：32列 x 8行
+constexpr int THREAD_B_LAYOUT_X = 32;
+constexpr int THREAD_B_LAYOUT_Y = BLOCK_SIZE / THREAD_B_LAYOUT_X; // 8
 
-        __syncthreads();
+// B 矩阵（转置）加载时的线程布局：8列 x 32行
+constexpr int THREAD_B_T_LAYOUT_X = 8;
+constexpr int THREAD_B_T_LAYOUT_Y = BLOCK_SIZE / THREAD_B_T_LAYOUT_X; // 32
 
-        if (row_c < M && col_c < N) {
-            for (int n = 0; n < TILE_SIZE; ++n) {
-                acc += s_a[ty * TILE_SIZE + n] * s_b[n * TILE_SIZE + tx];
-            }
-        }
-        __syncthreads();
-    }
+// C 矩阵（结果）计算时的线程布局：16列 x 16行
+constexpr int THREAD_C_LAYOUT_X = 16;
+constexpr int THREAD_C_LAYOUT_Y = BLOCK_SIZE / THREAD_C_LAYOUT_X; // 16
 
-    if (row_c < M && col_c < N) {
-        C[row_c * N + col_c] = acc;
-    }
+// 每个线程负责计算的 C 矩阵分块大小
+constexpr int THREAD_C_X_TILE_SIZE = BLOCK_N / THREAD_C_LAYOUT_X; // 128 / 16 = 8
+constexpr int THREAD_C_Y_TILE_SIZE = BLOCK_M / THREAD_C_LAYOUT_Y; // 128 / 16 = 8
+
+// Warp 内部细分：在 block 16列 x 16行内将 32 线程的 Warp 分为 8行x4列 的结构，warp 按照 4 x 2 排布
+constexpr int THREAD_C_WARP_X = 4;
+constexpr int THREAD_C_WARP_Y = 32 / THREAD_C_WARP_X; // 8
+constexpr int THREAD_C_WARP_DIM_X = THREAD_C_LAYOUT_X / THREAD_C_WARP_X; // 4
+
 }
 
+
+/**
+ * 矩阵乘法 C = A * B，使用共享内存进行分块矩阵乘法，并且实现了双缓冲和预加载机制，以隐藏内存访问延迟。
+ * @param A, B, C are device pointers, A[M, K], B[K, N], C[M, N]
+ */
+static __global__ void matmul_pipline_kernel(const float* A, const float* B, float* C, int M, int N, int K) { 
+    // 1. 当前 block 负责计算 C 矩阵中以 (row0, col0) 为左上角，大小为 BLOCK_M x BLOCK_N 的子矩阵
+    const int row0 = blockIdx.y * BLOCK_M;
+    const int col0 = blockIdx.x * BLOCK_N;
+
+    // 2. 分配共享内存，双缓冲
+    __shared__ float sA[2][BLOCK_K][BLOCK_M]; // A 的分块，大小为 BLOCK_K x BLOCK_M，双缓冲
+    __shared__ float sB[2][BLOCK_K][BLOCK_N]; // B 的分块，大小为 BLOCK_K x BLOCK_N，双缓冲
+
+    // 3. 线程ID和线程布局计算
+    // copyA 线程布局：8列 x 32行
+    const int tAx = threadIdx.x & (THREAD_A_LAYOUT_X - 1); // 0-7 列索引
+    const int tAy = threadIdx.x / THREAD_A_LAYOUT_X; // 0-31 行索引
+    // copyB 线程布局：32列 x 8行
+    const int tBx = threadIdx.x & (THREAD_B_LAYOUT_X - 1); // 0-31 列索引
+    const int tBy = threadIdx.x / THREAD_B_LAYOUT_X; // 0-7 行索引
+    // C 矩阵计算的线程映射，每个线程计算一个 8x8 的 C 矩阵分块
+    int warpId = threadIdx.x >> 5; // 0-7 warpId，32 线程一个 warp
+    int laneId = threadIdx.x & 31;
+    // C 矩阵计算的 warp 布局 ：2行 x 4列
+    int warpx = warpId & (THREAD_C_WARP_DIM_X - 1); // 0-3
+    int warpy = warpId / THREAD_C_WARP_DIM_X; // 0-1
+    int lanex = laneId & (THREAD_C_WARP_X - 1); // 0-3
+    int laney = laneId / THREAD_C_WARP_X; // 0-7
+    int tCx = warpx * THREAD_C_WARP_X + lanex; // 0-15 C 矩阵列索引
+    int tCy = warpy * THREAD_C_WARP_Y + laney; // 0-15 C 矩阵行索引
+
+    // 4. 寄存器声明
+    float acc[THREAD_C_Y_TILE_SIZE][THREAD_C_X_TILE_SIZE] = {0.0f}; // 每个线程计算的 C 矩阵分块的累加器，大小为 8x8
+    float tCsA[2][THREAD_C_Y_TILE_SIZE]; // A 矩阵分块加载到寄存器的临时变量，双缓冲，每个线程负责加载 8 行
+    float tCsB[2][THREAD_C_X_TILE_SIZE]; // B 矩阵分块加载到寄存器的临时变量，双缓冲，每个线程负责加载 8 列
+
+    int bufferId = 0; // 双缓冲切换标识
+
+    // 5. 预加载第一块 A 和 B 到共享内存
+    // 加载 A 的第一块
+    #pragma unroll
+    for (int i = 0; i < BLOCK_M; i += THREAD_A_LAYOUT_Y) {
+        int r = row0 + i + tAy;
+        #pragma unroll
+        for (int j = 0; j < BLOCK_K; j += THREAD_A_LAYOUT_X) {
+            int c = 0 + j + tAx;
+            sA[0][j + tAx][(i + tAy) ^ (tAx << 2)] = (r < M && c < K) ? A[r * K + c] : 0.0f;
+        }
+    }
+
+    // 加载 B 的第一块
+    #pragma unroll
+    for (int i = 0; i < BLOCK_K; i += THREAD_B_LAYOUT_Y) {
+        int r = 0 + i + tBy;
+        #pragma unroll
+        for (int j = 0; j < BLOCK_N; j += THREAD_B_LAYOUT_X) {
+            int c = col0 + j + tBx;
+            sB[0][i + tBy][j + tBx] = (r < K && c < N) ? B[r * N + c] : 0.0f;
+        }
+    }
+    __syncthreads();
+
+    // 6. 主循环
+    for (int k = BLOCK_K; k < K + BLOCK_K; k += BLOCK_K) {
+        // 6.1 计算当前块的矩阵乘法
+        #pragma unroll
+        for (int tk = 0; tk < BLOCK_K + 1; tk++) {
+            // 计算mma
+            if (tk > 0) {
+                #pragma unroll
+                for (int tm = 0; tm < THREAD_C_Y_TILE_SIZE; tm++) {
+                    #pragma unroll
+                    for (int tn = 0; tn < THREAD_C_X_TILE_SIZE; tn++) {
+                        acc[tm][tn] += tCsA[(tk - 1) & 1][tm] * tCsB[(tk - 1) & 1][tn];
+                    }
+                }
+            }
+
+            // s2r 预加载数据到寄存器
+            if (tk < BLOCK_K) {
+                // 加载 A 的分块到寄存器，一次加载 8 个float，并且按照寄存器访问模式进行重排，保证连续访问
+                #pragma unroll
+                for (int tm = 0; tm < THREAD_C_Y_TILE_SIZE >> 3; tm++) {
+                    int r = (tm * THREAD_C_LAYOUT_Y + tCy) << 3;
+                    FLOAT4(tCsA[tk & 1][tm << 3]) = FLOAT4(sA[bufferId][tk][r ^ (tk << 2)]);
+                    FLOAT4(tCsA[tk & 1][(tm << 3) + 4]) = FLOAT4(sA[bufferId][tk][(r + 4) ^ (tk << 2)]);
+                }
+
+                // 加载 B 的分块到寄存器，一次加载 8 个float
+                #pragma unroll
+                for (int tn = 0; tn < THREAD_C_X_TILE_SIZE >> 3; tn++) {
+                    int c = (tn * THREAD_C_LAYOUT_X + tCx) << 3;
+                    FLOAT4(tCsB[tk & 1][tn << 3]) = FLOAT4(sB[bufferId][tk][c]);
+                    FLOAT4(tCsB[tk & 1][(tn << 3) + 4]) = FLOAT4(sB[bufferId][tk][(c + 4)]);
+                }
+            }
+        }
+        // 预加载 下一块 A 和 B 到共享内存
+        if (k < K) {
+            // 加载 A 的下一块
+            #pragma unroll
+            for (int i = 0; i < BLOCK_M; i += THREAD_A_LAYOUT_Y) {
+                int r = row0 + i + tAy;
+                #pragma unroll
+                for (int j = 0; j < BLOCK_K; j += THREAD_A_LAYOUT_X) {
+                    int c = k + j + tAx;
+                    sA[bufferId ^ 1][j + tAx][(i + tAy) ^ ((j + tAx) << 2)] = (r < M && c < K) ? A[r * K + c] : 0.0f;
+                }
+            }
+
+            // 加载 B 的下一块
+            #pragma unroll
+            for (int i = 0; i < BLOCK_K; i += THREAD_B_LAYOUT_Y) {
+                int r = k + i + tBy;
+                #pragma unroll
+                for (int j = 0; j < BLOCK_N; j += THREAD_B_LAYOUT_X) {
+                    int c = col0 + j + tBx;
+                    sB[bufferId ^ 1][i + tBy][j + tBx] = (r < K && c < N) ? B[r * N + c] : 0.0f;
+                }
+            }
+            __syncthreads();
+        }
+
+        bufferId ^= 1; // 切换缓冲区
+    }
+
+    // 7. 将计算结果写回全局内存
+    #pragma unroll
+    for (int i = 0; i < THREAD_C_Y_TILE_SIZE; i++) {
+        int r = row0 + (tCy << 3) + (i & (~7)) * THREAD_C_LAYOUT_Y + (i & 7);
+        #pragma unroll
+        for (int j = 0; j < THREAD_C_X_TILE_SIZE; j++) {
+            int c = col0 + (tCx << 3) + (j & (~7)) * THREAD_C_LAYOUT_X + (j & 7);
+            if (r < M && c < N) {
+                C[r * N + c] = acc[i][j];
+            }
+        }
+    }
+}
 
 __global__ void qkv_div_qk_kernel(const float* qkv, const float* phi_qk, float* output, int M, int d) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -167,16 +309,51 @@ void linear_self_attention_cuda(const float* Q, const float* K, const float* V, 
     mv_kernel<<<div_up(M, 4), 128>>>(phi_q, ksum, phi_qk, M, d);
 
     // // compute kv = phi(K)^T @ V -> (d x M) @ (M x d) = (d x d)
-    dim3 block(TILE_SIZE * TILE_SIZE);
-    dim3 grid(div_up(d, TILE_SIZE), div_up(d, TILE_SIZE));
-    matmul_kernel<<<grid, block>>>(phi_k_T, V, kv, d, d, M);
+    dim3 block(BLOCK_SIZE);
+    dim3 grid(div_up(d, BLOCK_N), div_up(d, BLOCK_M));
+    matmul_pipline_kernel<<<grid, block>>>(phi_k_T, V, kv, d, d, M);
 
     // // compute qkv = phi(Q) @ kv -> (M x d) @ (d x d) = (M x d)
-    matmul_kernel<<<dim3(div_up(d, TILE_SIZE), div_up(M, TILE_SIZE)), block>>>(phi_q, kv, qkv, M, d, d);
+    grid = dim3(div_up(d, BLOCK_N), div_up(M, BLOCK_M));
+    matmul_pipline_kernel<<<grid, block>>>(phi_q, kv, qkv, M, d, d);
 
     // // compute output = qkv / phi_qk -> (M x d) / (M x 1)
     qkv_div_qk_kernel<<<div_up(M * d, 128), 128>>>(qkv, phi_qk, output, M, d);
 
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
     CHECK_CUDA_ERROR(cudaFree(d_buf));
+}
+
+
+torch::Tensor linear_self_attention(
+    const torch::Tensor& Q,
+    const torch::Tensor& K,
+    const torch::Tensor& V
+) {
+    TORCH_CHECK(Q.ndimension() == 2, "Q must be 2D");
+    TORCH_CHECK(K.ndimension() == 2, "K must be 2D");
+    TORCH_CHECK(V.ndimension() == 2, "V must be 2D");
+    TORCH_CHECK(Q.device().is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.device().is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.device().is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.dtype() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.dtype() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.dtype() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.size(0) == K.size(0), "Q and K must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == K.size(1), "Q and K must have the same number of columns");
+    TORCH_CHECK(Q.size(0) == V.size(0), "Q and V must have the same number of rows");
+    TORCH_CHECK(Q.size(1) == V.size(1), "Q and V must have the same number of columns");
+
+    int M = Q.size(0);
+    int d_model = Q.size(1);
+    torch::Tensor output = torch::zeros({M, d_model}, Q.options());
+
+    linear_self_attention_cuda(
+        Q.data_ptr<float>(),
+        K.data_ptr<float>(),
+        V.data_ptr<float>(),
+        output.data_ptr<float>(),
+        M, d_model
+    );
+    return output;
 }

@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 /*
 Implement the Swish-Gated Linear Unit (SWiGLU) activation function forward pass for 1D input vectors. Given an input tensor of shape [N] where N is the number of elements, compute the output using the elementwise formula. The input and output tensor must be of type float32.
 
@@ -39,4 +41,23 @@ void swiglu_cuda(const float* input, float* output, int N) {
 
     swiglu_kernel<<<blocksPerGrid, threadsPerBlock>>>(input, output, halfN);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor swiglu(
+    const torch::Tensor& input
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(input.size(0) % 2 == 0, "Input size must be even");
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N / 2}, options);
+    swiglu_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
 }

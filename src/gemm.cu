@@ -2,6 +2,7 @@
 
 #include <cuda_fp16.h>
 #include <mma.h>
+#include <torch/extension.h>
 
 /*
 Implement a basic General Matrix Multiplication (GEMM). Given matrix 
@@ -553,4 +554,35 @@ void gemm_cuda(const half* A, const half* B, half* C, int M, int N, int K, float
     // gemm_warp_double_buffer(A, B, C, M, N, K, alpha, beta);
     // gemm_warp_wmma(A, B, C, M, N, K, alpha, beta);
     gemm_warp_wmma_double_buffer(A, B, C, M, N, K, alpha, beta);
+}
+
+
+torch::Tensor gemm(
+    const torch::Tensor& A,
+    const torch::Tensor& B,
+    torch::Tensor& C,
+    int M, int N, int K,
+    float alpha, float beta
+) { 
+    TORCH_CHECK(A.ndimension() == 1, "Input A must be 1D");
+    TORCH_CHECK(B.ndimension() == 1, "Input B must be 1D");
+    TORCH_CHECK(C.ndimension() == 1, "Input C must be 1D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(B.device().is_cuda(), "Input B must be on CUDA");
+    TORCH_CHECK(C.device().is_cuda(), "Input C must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat16, "Input A must be of type float16");
+    TORCH_CHECK(B.dtype() == torch::kFloat16, "Input B must be of type float16");
+    TORCH_CHECK(C.dtype() == torch::kFloat16, "Input C must be of type float16");
+    TORCH_CHECK(A.size(0) == M * K, "Input A must be a 1D matrix")
+    TORCH_CHECK(B.size(0) == N * K, "Input B must be a 1D matrix")
+    TORCH_CHECK(C.size(0) == M * N, "Input C must be a 1D matrix")
+    
+    gemm_cuda(
+        reinterpret_cast<const half*>(A.data_ptr<at::Half>()),
+        reinterpret_cast<const half*>(B.data_ptr<at::Half>()),
+        reinterpret_cast<half*>(C.data_ptr<at::Half>()),
+        M, N, K,
+        alpha, beta
+    );
+    return C;
 }

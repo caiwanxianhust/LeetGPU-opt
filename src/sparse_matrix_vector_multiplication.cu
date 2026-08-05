@@ -1,6 +1,8 @@
 #include "utils.cuh"
 #include "cuda_kernels.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a GPU program that performs sparse matrix-vector multiplication. Given a sparse matrix 
@@ -50,3 +52,27 @@ void matrix_vector_multiplication_cuda(const float* A, const float* x, float* y,
     matrix_vector_multiplication_kernel<<<grid, block>>>(A, x, y, M, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 } 
+
+
+torch::Tensor sparse_matrix_vector_multiplication(
+    const torch::Tensor& A, 
+    const torch::Tensor& x, 
+    int M, int N, int nnz
+) {
+    TORCH_CHECK(A.ndimension() == 1, "Input A must be 1D");
+    TORCH_CHECK(x.ndimension() == 1, "Input x must be 1D");
+    TORCH_CHECK(A.device().is_cuda(), "Input A must be on CUDA");
+    TORCH_CHECK(x.device().is_cuda(), "Input x must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "Input A must be of type float32");
+    TORCH_CHECK(x.dtype() == torch::kFloat32, "Input x must be of type float32");
+    TORCH_CHECK(A.size(0) == M * N, "Input A must be a 1D matrix")
+    TORCH_CHECK(x.size(0) == N, "Input x must be a 1D matrix")
+    torch::Tensor y = torch::empty({M}, x.options());
+    matrix_vector_multiplication_cuda(
+        A.data_ptr<float>(),
+        x.data_ptr<float>(),
+        y.data_ptr<float>(),
+        M, N, nnz
+    );
+    return y;
+}

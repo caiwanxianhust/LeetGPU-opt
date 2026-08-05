@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <assert.h>
+#include <torch/extension.h>
 
 /*
 Implement RMS Normalization forward pass for 1D input vectors. Given an input tensor of shape [N] where N is the number of elements, compute the normalized output using a scalar scale (gamma) and shift (beta) parameter.
@@ -61,4 +62,26 @@ void rms_norm_cuda(const float* input, float gamma, float beta,
                      float* output, int N, float eps) {
     rms_norm_kernel<<<1, 1024>>>(input, gamma, beta, output, N, eps);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor rms_norm_1D(
+    const torch::Tensor& input,
+    float eps, float gamma, float beta
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N}, options);
+    rms_norm_cuda(
+        input.data_ptr<float>(),
+        gamma,
+        beta,
+        output.data_ptr<float>(),
+        N,
+        eps
+    );
+    return output;
 }

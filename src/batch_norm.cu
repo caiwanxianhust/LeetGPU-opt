@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <assert.h>
+#include <torch/extension.h>
 
 
 /*
@@ -245,4 +246,39 @@ void batch_norm_cuda(const float* input, const float* gamma, const float* beta,
 {
     // batch_norm_tile::launch_batch_norm_tile_kernel(input, gamma, beta, output, N, C, eps);
     batch_norm_transpose::launch_batch_norm_transpose_kernel(input, gamma, beta, output, N, C, eps);
+}
+
+
+torch::Tensor batch_norm(
+    const torch::Tensor& input,
+    const torch::Tensor& gamma,
+    const torch::Tensor& beta,
+    float eps
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(gamma.ndimension() == 1, "Gamma must be 1D");
+    TORCH_CHECK(beta.ndimension() == 1, "Beta must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(gamma.device().is_cuda(), "Gamma must be on CUDA");
+    TORCH_CHECK(beta.device().is_cuda(), "Beta must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(gamma.dtype() == torch::kFloat32, "Gamma must be of type float32");
+    TORCH_CHECK(beta.dtype() == torch::kFloat32, "Beta must be of type float32");
+    TORCH_CHECK(input.size(1) == gamma.size(0), "Input and gamma must have compatible shapes");
+    TORCH_CHECK(input.size(1) == beta.size(0), "Input and beta must have compatible shapes");
+
+    int N = input.size(0);
+    int D = input.size(1);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({N, D}, options);
+
+    batch_norm_cuda(
+        input.data_ptr<float>(),
+        gamma.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, D, eps
+    );
+
+    return output;
 }

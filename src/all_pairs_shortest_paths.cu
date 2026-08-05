@@ -1,6 +1,7 @@
 #include "utils.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -678,4 +679,23 @@ void all_pairs_shortest_paths_cuda(const float* dist, float* output, int N) {
     // shared_mem_floyd_warshall::all_pairs_shortest_paths_shared_mem_cuda(dist, output, N);
     // reBourne87_floyd_warshall::all_pairs_shortest_paths_tile_cuda(dist, output, N);
     tiled_tsinghua_floyd_warshall::all_pairs_shortest_paths_tile_cuda(dist, output, N);
+}
+
+
+torch::Tensor all_pairs_shortest_paths(
+    const torch::Tensor& graph
+) {
+    TORCH_CHECK(graph.ndimension() == 2, "Graph must be 2D");
+    TORCH_CHECK(graph.device().is_cuda(), "Graph must be on CUDA");
+    TORCH_CHECK(graph.dtype() == torch::kFloat32, "Graph must be of type float32");
+    TORCH_CHECK(graph.size(0) == graph.size(1), "Graph must be a square matrix");
+
+    int N = graph.size(0);
+    torch::Tensor output = torch::empty_like(graph);
+    all_pairs_shortest_paths_cuda(
+        graph.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N
+    );
+    return output;
 }

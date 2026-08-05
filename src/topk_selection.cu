@@ -3,6 +3,8 @@
 #include <cuda.h>
 #include <cfloat>
 #include <assert.h>
+#include <torch/extension.h>
+#include <cub/cub.cuh>
 
 
 /*
@@ -38,20 +40,7 @@ All values in input are 32-bit floats
 
 
 
-// __device__ __forceinline__ void inset_to_min_heap(float *heap, float val, int k) {
-//     if (val > heap[k - 1]) {
-//         heap[k - 1] = val;
-//         for (int i = k - 1; i > 0; i--) {
-//             if (heap[i] > heap[i - 1]) {
-//                 float temp = heap[i];
-//                 heap[i] = heap[i - 1];
-//                 heap[i - 1] = temp;
-//             }
-//         }
-//     }
-// }
-
-__device__ __forceinline__ void inset_to_min_heap(float *heap, float val, int k) {
+static __device__ __forceinline__ void inset_to_min_heap(float *heap, float val, int k) {
     if (val < heap[k - 1]) return;
     int i = k - 2;
     while (i >= 0 && heap[i] < val) {
@@ -62,7 +51,7 @@ __device__ __forceinline__ void inset_to_min_heap(float *heap, float val, int k)
 }
 
 
-__device__ __forceinline__ void combine_min_heaps(float *heap1, float *heap2, int k) {
+static __device__ __forceinline__ void combine_min_heaps(float *heap1, float *heap2, int k) {
     for (int i = 0; i < k; i++) {
         inset_to_min_heap(heap1, heap2[i], k);
     }
@@ -70,7 +59,7 @@ __device__ __forceinline__ void combine_min_heaps(float *heap1, float *heap2, in
 
 
 
-__global__ void topk_in_block_kernel(
+static __global__ void topk_in_block_kernel(
     const float* input, float* block_topk, int N, int k
 ) {
     extern __shared__ float shared_topk[];
@@ -103,7 +92,7 @@ __global__ void topk_in_block_kernel(
     }
 }
 
-void small_k_topk_cuda(
+static void small_k_topk_cuda(
     const float* input, float* output, int N, int k
 ) {
     int block_size = 128;
@@ -127,7 +116,7 @@ void small_k_topk_cuda(
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
 
-__global__ void big_k_topk_in_block_kernel(
+static __global__ void big_k_topk_in_block_kernel(
     const float* input, float* output, float* d_block_topk, int N, int k
 ) {
     // Each thread has its own min-heap in global memory
@@ -154,7 +143,7 @@ __global__ void big_k_topk_in_block_kernel(
     }
 }
 
-__global__ void min_heap_reduce_kernel(
+static __global__ void min_heap_reduce_kernel(
     float* output, float* d_block_topk, int N, int k, int offset
 ) { 
     float* min_heap = d_block_topk + threadIdx.x * offset * k;
@@ -171,7 +160,7 @@ __global__ void min_heap_reduce_kernel(
     }
 }
 
-void big_k_topk_cuda(
+static void big_k_topk_cuda(
     const float* input, float* output, int N, int k
 ) {
     int block_size = 1024;
@@ -185,14 +174,77 @@ void big_k_topk_cuda(
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
 
+
+static void topk_by_cub(const float* input, float* output, int N, int k)
+{
+    // 1. 分配临时缓冲区用于存放排序后的完整数据
+    // 注意：DeviceRadixSort 通常需要输入输出缓冲区大小一致
+    float* d_temp_sorted = nullptr;
+    cudaMalloc(&d_temp_sorted, N * sizeof(float));
+
+    // 2. 查询降序排序所需的临时空间大小
+    size_t sort_temp_bytes = 0;
+    cub::DeviceRadixSort::SortKeysDescending(
+        nullptr, sort_temp_bytes, 
+        input, d_temp_sorted, 
+        N
+    );
+
+    // 3. 分配排序用的临时空间并执行排序
+    void* d_sort_temp = nullptr;
+    cudaMalloc(&d_sort_temp, sort_temp_bytes);
+    
+    cub::DeviceRadixSort::SortKeysDescending(
+        d_sort_temp, sort_temp_bytes, 
+        input, d_temp_sorted, 
+        N
+    );
+
+    // 4. 将排序后的前 K 个元素复制到最终输出
+    // 此时 d_temp_sorted 的前 k 个元素即为最大的 k 个，且已降序排列
+    cudaMemcpy(output, d_temp_sorted, k * sizeof(float), cudaMemcpyDeviceToDevice);
+
+    // 5. 清理临时缓冲区
+    cudaFree(d_temp_sorted);
+    // 释放排序临时空间
+    cudaFree(d_sort_temp);
+}
+
+
+
 void topk_cuda(
     const float* input, float* output, int N, int k
 ) {
-    if (k <= 32) {
-        small_k_topk_cuda(input, output, N, k);
-    }
-    else {
-        // TODO: implement large k topk
-        big_k_topk_cuda(input, output, N, k);
-    }
+    // if (k <= 32) {
+    //     small_k_topk_cuda(input, output, N, k);
+    // }
+    // else {
+    //     // TODO: implement large k topk
+    //     big_k_topk_cuda(input, output, N, k);
+    // }
+
+    topk_by_cub(input, output, N, k);
+}
+
+
+torch::Tensor topk_1D(
+    const torch::Tensor& input,
+    int k
+) {
+    TORCH_CHECK(input.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(k > 0 && k <= input.size(0), "k must be in the range [1, N]");
+
+    int N = input.size(0);
+    auto options = input.options();
+    torch::Tensor output = torch::empty({k}, options);
+    
+    topk_cuda(
+        input.data_ptr<float>(),
+        output.data_ptr<float>(),
+        N, k
+    );
+    
+    return output; 
 }

@@ -1,5 +1,6 @@
 #include "utils.cuh"
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -114,4 +115,34 @@ void gaussian_blur_cuda(
         input_rows, input_cols, kernel_rows, kernel_cols
     );
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor gaussian_blur(
+    const torch::Tensor& input,
+    const torch::Tensor& kernel
+) {
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D (H, W)");
+    TORCH_CHECK(kernel.ndimension() == 2, "Kernel must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(kernel.device().is_cuda(), "Kernel must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(kernel.dtype() == torch::kFloat32, "Kernel must be of type float32");
+
+    torch::Tensor output = torch::empty_like(input);
+    int input_rows = input.size(0);
+    int input_cols = input.size(1);
+    int kernel_rows = kernel.size(0);
+    int kernel_cols = kernel.size(1);
+    TORCH_CHECK(kernel_rows % 2 == 1 && kernel_cols % 2 == 1, "Kernel size must be odd");
+    TORCH_CHECK(input_rows %2 == 1 && input_cols % 2 == 1, "Input size must be odd");
+
+    gaussian_blur_cuda(
+        input.data_ptr<float>(),
+        kernel.data_ptr<float>(),
+        output.data_ptr<float>(),
+        input_rows, input_cols,
+        kernel_rows, kernel_cols
+    );
+    return output;
 }

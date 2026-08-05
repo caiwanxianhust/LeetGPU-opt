@@ -1,6 +1,8 @@
 #include "utils.cuh"
 
 #include <cfloat>
+#include <torch/extension.h>
+#include <tuple>
 
 /*
 MoE Top-K Gating
@@ -117,4 +119,23 @@ void moe_topk_gating_cuda(const float* logits, float* topk_weights, int* topk_in
     constexpr int BLOCK_SIZE = 128;
     int grid_size = div_up(M, 128 / 32);
     moe_topk_gating_kernel<<<grid_size, BLOCK_SIZE>>>(logits, topk_weights, topk_indices, M, E, k);
+}
+
+
+std::tuple<torch::Tensor, torch::Tensor> moe_topk_gating(const torch::Tensor& logits, int k)
+{ 
+    TORCH_CHECK(logits.ndimension() == 2, "Logits must be 2D");
+    TORCH_CHECK(logits.device().is_cuda(), "Logits must be on CUDA");
+    TORCH_CHECK(logits.dtype() == torch::kFloat32, "Logits must be of type float32");
+    TORCH_CHECK(k > 0 && k <= logits.size(1), "Invalid k");
+    int M = logits.size(0);
+    int E = logits.size(1);
+    torch::Tensor topk_weights = torch::empty({M, k}, logits.options());
+    torch::Tensor topk_indices = torch::empty({M, k}, logits.options().dtype(torch::kInt32));
+    moe_topk_gating_cuda(
+        logits.data_ptr<float>(), 
+        topk_weights.data_ptr<float>(), 
+        topk_indices.data_ptr<int>(), 
+        M, E, k);
+    return {topk_weights, topk_indices};
 }

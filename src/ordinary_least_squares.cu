@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 /*
 Solve the Ordinary Least Squares (OLS) regression problem on a GPU. Given a feature matrix 
@@ -211,4 +212,28 @@ void ordinary_least_squares_cuda(const float* X, const float* y, float* beta, in
     CHECK_CUDA_ERROR(cudaFreeAsync(d_buf, stream_1));
     CHECK_CUDA_ERROR(cudaStreamDestroy(stream_1));
     CHECK_CUDA_ERROR(cudaStreamDestroy(stream_2));
+}
+
+
+torch::Tensor ordinary_least_squares(
+    const torch::Tensor& X,
+    const torch::Tensor& y
+) { 
+    TORCH_CHECK(X.ndimension() == 2, "Input X must be 2D");
+    TORCH_CHECK(y.ndimension() == 1, "Input y must be 1D");
+    TORCH_CHECK(X.device().is_cuda(), "Input X must be on CUDA");
+    TORCH_CHECK(y.device().is_cuda(), "Input y must be on CUDA");
+    TORCH_CHECK(X.dtype() == torch::kFloat32, "Input X must be of type float32");
+    TORCH_CHECK(y.dtype() == torch::kFloat32, "Input y must be of type float32");
+    TORCH_CHECK(X.size(0) == y.size(0), "Input tensors must have the same size");
+
+    torch::Tensor beta = torch::empty({X.size(1)}, X.options());
+    ordinary_least_squares_cuda(
+        X.data_ptr<float>(),
+        y.data_ptr<float>(),
+        beta.data_ptr<float>(),
+        X.size(0), X.size(1)
+    );
+
+    return beta;
 }

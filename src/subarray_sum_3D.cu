@@ -3,6 +3,7 @@
 
 #include <cuda.h>
 #include <stdio.h>
+#include <torch/extension.h>
 
 
 /*
@@ -81,4 +82,29 @@ void subarray_sum_3D_cuda(
     zeros_init_kernel<<<1, 256>>>(output, 1);
     subarray_sum_3D_kernel<<<grid, block>>>(input, output, N, M, K, S_DEP, E_DEP, S_ROW, E_ROW, S_COL, E_COL);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor subarray_sum_3D(
+    const torch::Tensor& input,
+    const int S_DEP, const int E_DEP, const int S_ROW, const int E_ROW, const int S_COL, const int E_COL
+) {
+    TORCH_CHECK(input.ndimension() == 3, "Input must be 3D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(E_DEP >= S_DEP && input.size(0) >= E_DEP, "Invalid range");
+    TORCH_CHECK(E_ROW >= S_ROW && input.size(1) >= E_ROW, "Invalid range");
+    TORCH_CHECK(E_COL >= S_COL && input.size(2) >= E_COL, "Invalid range");
+
+    int n = input.size(0);
+    int m = input.size(1);
+    int k = input.size(2);
+    torch::Tensor output = torch::empty({1}, input.options());
+    subarray_sum_3D_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, m, k,
+        S_DEP, E_DEP, S_ROW, E_ROW, S_COL, E_COL
+    );
+    return output;
 }

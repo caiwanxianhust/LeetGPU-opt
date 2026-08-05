@@ -2,6 +2,7 @@
 #include "cuda_kernels.cuh"
 
 #include <cuda.h>
+#include <torch/extension.h>
 
 
 /*
@@ -65,4 +66,28 @@ void subarray_sum_2D_cuda(const int* input, int* output, int N, int M, int S_ROW
     zeros_init_kernel<<<1, 256>>>(output, 1);
     subarray_sum_2D_kernel<<<grid, block>>>(input, output, N, M, S_ROW, E_ROW, S_COL, E_COL);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
+}
+
+
+torch::Tensor subarray_sum_2D(
+    const torch::Tensor& input,
+    const int S_ROW, const int E_ROW, const int S_COL, const int E_COL
+) { 
+    TORCH_CHECK(input.ndimension() == 2, "Input must be 2D");
+    TORCH_CHECK(input.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(input.dtype() == torch::kInt32, "Input must be of type int32");
+    TORCH_CHECK(E_ROW >= S_ROW && input.size(0) >= E_ROW, "Invalid range");
+    TORCH_CHECK(E_COL >= S_COL && input.size(1) >= E_COL, "Invalid range");
+
+    int n = input.size(0);
+    int m = input.size(1);
+    
+    torch::Tensor output = torch::zeros({1}, input.options());
+    subarray_sum_2D_cuda(
+        input.data_ptr<int>(),
+        output.data_ptr<int>(),
+        n, m,
+        S_ROW, E_ROW, S_COL, E_COL
+    );
+    return output;
 }

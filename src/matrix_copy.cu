@@ -1,5 +1,7 @@
 #include "utils.cuh"
 
+#include <torch/extension.h>
+
 
 /*
 Implement a program that copies an 
@@ -44,3 +46,22 @@ void copy_matrix_cuda(const float* A, float* B, int N) {
     copy_matrix_kernel<<<blocksPerGrid, threadsPerBlock>>>(A, B, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 } 
+
+
+torch::Tensor matrix_copy(
+    const torch::Tensor& A,
+    int N
+) {
+    TORCH_CHECK(A.ndimension() == 1, "Input must be 1D");
+    TORCH_CHECK(A.device().is_cuda(), "Input must be on CUDA");
+    TORCH_CHECK(A.dtype() == torch::kFloat32, "Input must be of type float32");
+    TORCH_CHECK(A.size(0) == N * N, "Input must be square matrix");
+    auto options = A.options();
+    torch::Tensor B = torch::empty({N * N}, options);
+    copy_matrix_cuda(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        N
+    );
+    return B;
+}
