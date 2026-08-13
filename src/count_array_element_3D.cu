@@ -33,11 +33,6 @@ Constraints
 */
 
 
-// static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-//     return (a + b - 1) / b;
-// }
-
-
 
 
 __global__ void count_3d_equal_kernel(const int* input, int* output, int N, int M, int K) {

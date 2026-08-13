@@ -25,9 +25,7 @@ Constraints
 */
 
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 __global__ void max_subarray_sum_kernel(const int* input, int* max_in_block, int N, int window_size, int output_size) {

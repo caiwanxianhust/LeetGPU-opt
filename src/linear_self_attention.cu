@@ -32,9 +32,7 @@ static __device__ __host__ __forceinline__ float phi(float x) {
     return x > 0 ? x + 1.0f : exp(x);
 }
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 static constexpr int TILE_SIZE = 32;
 

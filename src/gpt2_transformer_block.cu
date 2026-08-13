@@ -33,10 +33,6 @@ namespace {
     constexpr int OFF_W_PROJ = 4727808;
     constexpr int OFF_BAIS_PROJ = 7087104;
 
-
-    __host__ __device__ inline int div_up(int a, int b) {
-        return (a + b - 1) / b;
-    }
 }
 
 

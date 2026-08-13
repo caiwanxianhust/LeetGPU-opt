@@ -3868,6 +3868,46 @@ def multi_head_cross_attention():
     # 验证结果
     compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
 
+def layer_normalization():
+    # 测试数据
+    M, C = 65536, 512
+    x = torch.randn(M, C, device="cuda", dtype=torch.float32)
+    weight = torch.randn(C, device="cuda", dtype=torch.float32)
+    bias = torch.randn(C, device="cuda", dtype=torch.float32)
+    epsilon = 1e-5
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_layer_normalization(x, weight, bias, epsilon):
+        return leetgpu.layer_normalization(x, weight, bias, epsilon)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_layer_normalization(x, weight, bias, epsilon):
+        """
+        实现 Layer Normalization
+        
+        Args:
+            x: 输入张量，shape [M, C]
+            weight: 缩放因子，shape [C]
+            bias: 偏置项，shape [C]
+            epsilon: 平滑项，用于避免除零错误
+            
+        Returns:
+            y: 输出张量，shape [M, C]
+        """
+        return torch.nn.functional.layer_norm(x, [C], weight, bias, epsilon)
+
+    # 运行测试
+    output_leetgpu = leetgpu_layer_normalization(x, weight, bias, epsilon)
+    print("LeetGPU:", output_leetgpu[:5, :5])
+    output_pytorch = pytorch_layer_normalization(x, weight, bias, epsilon)
+    print("PyTorch:", output_pytorch[:5, :5])
+
+    # 验证结果  
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
+
+
 
 
 
@@ -3899,7 +3939,7 @@ if __name__ == "__main__":
     # avg_categorical_cross_entropy_loss()
     # mse_vec()
     # gaussian_blur()
-    topk_1D()
+    # topk_1D()
     # batched_matmul()
     # int8_quantized_matmul()
     # ordinary_least_squares()
@@ -3953,5 +3993,6 @@ if __name__ == "__main__":
     # dpo_sequence_loss()
     # softmax_attention_backward()
     # multi_head_cross_attention()
+    layer_normalization()
 
     pass

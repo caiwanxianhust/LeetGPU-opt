@@ -1,5 +1,5 @@
 #include "utils.cuh"
-
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <torch/extension.h>
@@ -28,9 +28,7 @@ namespace {
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
 #define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])
 
-__host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 // --- 核心配置参数 ---
 constexpr int BLOCK_M = 128;      // Block 在 M 维度（行）处理的大小

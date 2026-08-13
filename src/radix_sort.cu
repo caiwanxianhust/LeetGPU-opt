@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <torch/extension.h>
 
@@ -31,9 +32,7 @@ namespace {
 }
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 /*

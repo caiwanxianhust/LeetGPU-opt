@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <cfloat>
@@ -50,9 +51,6 @@ Input and output tensors use float32 precision
 */
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
 
 
 __global__ void max_pooling_2D_kernel(const float* input, float* output,

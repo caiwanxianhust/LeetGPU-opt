@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <stdio.h>
@@ -48,9 +49,7 @@ namespace {
 }
 
 
-static __host__ __device__ __forceinline__ int div_up(int m, int n) {
-    return (m + n - 1) / n;
-}
+
 
 
 __global__ void matrix_multiply_kernel(const float* A, const float* B, float* C, int N) { 

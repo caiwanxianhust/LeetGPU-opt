@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <cuda_fp16.h>
@@ -39,9 +40,6 @@ Constraints
 
 namespace { 
     constexpr int TILE_SIZE = 32;
-    __host__ __device__ __forceinline__ int div_up(int x, int y) {
-        return (x + y - 1) / y;
-    }
 }
 
 

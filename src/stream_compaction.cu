@@ -24,9 +24,7 @@ out is pre-allocated with N elements, initialised to 0.0
 Performance is measured with N = 50,000,000
 */
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 __global__ void block_count_kernel(const float* A, int N, int* d_block_cnt, int nums_per_block) {
     int offset = blockIdx.x * nums_per_block;

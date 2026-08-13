@@ -29,9 +29,7 @@ The tolerance is set to 1e-2 to account for the inherent randomness in Monte Car
 */
 
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 __global__ void reduce_in_block_kernel(const float* y_samples, float* result_in_block, float scaler, int n_samples) {

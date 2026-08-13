@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <torch/extension.h>
@@ -32,9 +33,6 @@ Constraints
 1 ≤ M, N, K ≤ 1024
 */
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
 
 
 template <int BM, int BN, int BK>

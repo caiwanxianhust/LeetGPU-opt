@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cfloat>
 #include <torch/extension.h>
@@ -41,9 +42,7 @@ Performance is measured with M = 1,024, k = 2
 */
 
 
-static __host__ __device__ __forceinline__ int div_up(int x, int y) {
-    return (x + y - 1) / y;
-}
+
 
 
 static __device__ __forceinline__ void insert_to_min_heap(float *heap, int *heap_idx, float val, int idx, int k) {

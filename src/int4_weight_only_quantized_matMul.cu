@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda_fp16.h>
 #include <stdint.h>
@@ -34,9 +35,7 @@ Performance is measured with M = 4,096, N = 4,096, K = 4,096, group_size = 128
 
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
 #define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])

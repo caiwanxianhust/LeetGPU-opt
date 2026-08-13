@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <assert.h>
 #include <torch/extension.h>
@@ -22,9 +23,6 @@ Performance is measured with B = 64, L = 16,384
 */
 
 namespace {
-    __host__ __device__ __forceinline__ int div_up(int a, int b) {
-        return (a + b - 1) / b;
-    }
 
     constexpr int CHUNK_SIZE = 128;
 

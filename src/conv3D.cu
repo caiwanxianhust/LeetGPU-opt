@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <torch/extension.h>
@@ -36,9 +37,6 @@ kernel_rows ≤ input_rows
 kernel_cols ≤ input_cols
 */
 
-static __host__ __device__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
 
 
 __global__ void conv3D_kernel(const float* input, const float* kernel, float* output,

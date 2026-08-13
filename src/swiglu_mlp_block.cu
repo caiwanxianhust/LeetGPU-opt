@@ -1,13 +1,12 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <torch/extension.h>
 
 
 namespace gemm_pipline {
 
-__host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
 #define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])

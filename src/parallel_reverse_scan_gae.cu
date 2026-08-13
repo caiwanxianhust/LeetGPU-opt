@@ -5,9 +5,7 @@
 
 
 
-static __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 static __global__ void naive_reverse_scan_gae_kernel(

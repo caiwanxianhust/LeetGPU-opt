@@ -29,10 +29,7 @@ References
 Xiao et al., Efficient Streaming Language Models with Attention Sinks (arXiv:2309.17453, ICLR 2024) — introduces the attention sink phenomenon and the efficient LLM streaming mechanism. For a more in depth dive, please read the paper.
 */
 
-static __forceinline__ int div_up(int a, int b) 
-{
-    return (a + b - 1) / b;
-}
+
 
 namespace {
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问

@@ -224,3 +224,8 @@ static __device__ float block_all_reduce_max(float val) {
     
     return ret;
 }
+
+
+static __forceinline__ __host__ __device__ int div_up(int m, int n) {
+    return (m + n - 1) / n;
+}

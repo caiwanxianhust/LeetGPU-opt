@@ -28,9 +28,7 @@ namespace {
     constexpr int OFF_W_DOWN = 2098176;
 
 
-    __host__ __device__ inline int div_up(int a, int b) {
-        return (a + b - 1) / b;
-    }
+
     
     // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
 #define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])

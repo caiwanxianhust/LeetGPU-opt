@@ -1,4 +1,7 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
+
+
 #include <cuda.h>
 #include <torch/extension.h>
 
@@ -18,9 +21,7 @@ All values are 32-bit floats
 Performance is measured with rows = 8,192, cols = 8,192
 */
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 static constexpr int tile_size = 32;
 

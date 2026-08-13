@@ -38,9 +38,7 @@ Input and output arrays have length 2 × N
 Performance is measured with N = 262,144
 */
 
-static __host__ __device__ inline int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 

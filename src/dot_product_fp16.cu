@@ -34,9 +34,6 @@ A and B have identical lengths
 1 ≤ N ≤ 100,000,000
 */
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
 
 
 __global__ void dot_product_fp16_in_block_kernel(const half* A, const half* B, half* output, int N, int nums_per_block) {

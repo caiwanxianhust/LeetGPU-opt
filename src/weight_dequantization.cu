@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 
 #include <cuda.h>
@@ -50,9 +51,7 @@ TILE_SIZE ∈ {16, 32, 64, 128}
 */
 
 
-static __host__ __device__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 __global__ void dequantize_kernel(const int M, const int N, const int TILE_SIZE, const float* X, const float* S, float* Y) {
     int row = blockIdx.y * blockDim.y + threadIdx.y;

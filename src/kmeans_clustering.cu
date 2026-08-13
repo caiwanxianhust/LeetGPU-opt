@@ -1,5 +1,5 @@
 #include "utils.cuh"
-
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <cfloat>
@@ -30,9 +30,7 @@ namespace {
     constexpr int BLOCK_SIZE = 256;
 }
 
-static __host__ __device__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 template <typename T>
 __global__ void init_by_value_kernel(T* vec, int size, T value)

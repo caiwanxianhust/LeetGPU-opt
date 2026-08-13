@@ -31,9 +31,7 @@ Solutions are tested with absolute tolerance of 1e-2 and relative tolerance of 1
 */
 
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 // X^T

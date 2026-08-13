@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <assert.h>
 #include <torch/extension.h>
@@ -36,9 +37,7 @@ Performance is measured with M = 8192, N = 6144, K = 4096
 */
 
 
-static __device__ __host__ __forceinline__ int div_up(int x, int y) {
-    return (x + y - 1) / y;
-}
+
 
 
 __global__ void matrix_multiplication_kernel(const float* A, const float* B, float* C, int M, int N, int K) {

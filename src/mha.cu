@@ -7,9 +7,6 @@
 namespace {
     constexpr int TILE_SIZE = 16;
 
-    __host__ __device__ int div_up(int a, int b) {
-        return (a + b - 1) / b;
-    }
 }
 
 

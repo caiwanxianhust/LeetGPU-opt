@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda_fp16.h>
 #include <mma.h>
@@ -33,9 +34,7 @@ Constraints
 */
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-  return (a + b - 1) / b;
-}
+
 
 template <int BM, int BN, int BK>
 __global__ void gemm_naive_kernel(const half* A, const half* B, half* C, int M, int N, int K, float alpha, float beta) {

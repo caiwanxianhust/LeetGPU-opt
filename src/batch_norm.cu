@@ -37,9 +37,6 @@ eps = 1e-5
 */
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
 
 
 namespace batch_norm_naive {

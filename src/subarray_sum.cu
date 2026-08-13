@@ -25,9 +25,7 @@ Constraints
 */
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 
 // launch configuration: one block, 1024 threads

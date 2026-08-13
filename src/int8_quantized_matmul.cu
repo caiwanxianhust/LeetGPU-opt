@@ -1,4 +1,5 @@
 #include "utils.cuh"
+#include "cuda_kernels.cuh"
 
 #include <cuda.h>
 #include <cstdint>
@@ -52,9 +53,7 @@ scale_A, scale_B, scale_C are positive floats
 -128 ≤ zero_point_A, zero_point_B, zero_point_C ≤ 127
 */
 
-static __device__ __host__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 template<int BM, int BN, int BK>
 __global__ void int8_quantized_matmul_kernel(const int8_t* A, const int8_t* B, int8_t* C, int M, int N, int K, float scale_A, float scale_B, float scale_C, int zero_point_A, int zero_point_B, int zero_point_C) {

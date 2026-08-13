@@ -30,9 +30,7 @@ Solutions are tested with absolute tolerance of 1e-2 and relative tolerance of 1
 */
 
 
-static __host__ __device__ __forceinline__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
+
 
 static __device__ __forceinline__ float sigmoid(float x) {
     return 1.0f / (1.0f + expf(-x));

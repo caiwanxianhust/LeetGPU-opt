@@ -24,10 +24,6 @@ Matrix Q is of size M×d and matrices K and V are of size N×d
 
 namespace {
     constexpr int TILE_SIZE = 32;
-
-    __host__ __device__ __forceinline__ int div_up(int a, int b) {
-        return (a + b - 1) / b;
-    }
 }
 
 

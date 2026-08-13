@@ -403,10 +403,18 @@ torch::Tensor multi_head_cross_attention(
 
 
 torch::Tensor parallel_reverse_scan_gae(
-    torch::Tensor rewards, 
-    torch::Tensor values, 
+    torch::Tensor& rewards, 
+    torch::Tensor& values, 
     float gamma, float lam
 ); 
+
+
+torch::Tensor layer_normalization(
+    torch::Tensor& input, 
+    torch::Tensor& weight, 
+    torch::Tensor& bias, 
+    float eps
+);
 
 
 
@@ -494,4 +502,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("softmax_attention_backward", &softmax_attention_backward, "Softmax Attention Backward (CUDA)");
     m.def("adder_transformer_inference", &adder_transformer_inference, "Adder Transformer Inference (CUDA)");
     m.def("multi_head_cross_attention", &multi_head_cross_attention, "Multi-Head Cross Attention (CUDA)");
+    m.def("layer_normalization", &layer_normalization, "Layer Normalization (CUDA)");
 }

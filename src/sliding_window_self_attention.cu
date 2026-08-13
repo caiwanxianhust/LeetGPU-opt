@@ -6,9 +6,6 @@
 #include <torch/extension.h>
 
 
-static __host__ __device__ int div_up(int a, int b) {
-    return (a + b - 1) / b;
-}
 
 
 __global__ void sw_attn_warp_reduce_kernel(

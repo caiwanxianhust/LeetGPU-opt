@@ -116,9 +116,7 @@ void flash_softmax_attention_naive_cuda(const float* Q, const float* K, const fl
 
 namespace {
 
-__host__ __device__ __forceinline__ int div_up(int m, int n) {
-    return (m + n - 1) / n;
-}
+
 
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
 #define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])

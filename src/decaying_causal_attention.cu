@@ -1,5 +1,5 @@
 #include "utils.cuh"
-
+#include "cuda_kernels.cuh"
 
 /*
 Implement decaying causal attention. Given query matrix Q, key matrix K, and value matrix V, each of shape seq_len × d_model, and a scalar decay factor gamma ∈ (0, 1], compute the unnormalized causal attention output where position n attends to all past positions m ≤ n with weight gamman−m:
@@ -21,9 +21,6 @@ Performance is measured with seq_len = 4,096, d_model = 64
 
 namespace {
 
-__host__ __device__ __forceinline__ int div_up(int m, int n) {
-    return (m + n - 1) / n;
-}
 
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
 #define FLOAT4(x) (reinterpret_cast<float4 *>(&(x))[0])
