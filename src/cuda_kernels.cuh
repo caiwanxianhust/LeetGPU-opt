@@ -168,7 +168,7 @@ static __device__ MD_F block_all_reduce_sum_mdf(MD_F val) {
     __syncthreads();
 
     MD_F tmp;
-    tmp.m = -INFINITY;
+    tmp.m = -1e20f;
     tmp.d = 0.0f;
     val = threadIdx.x < (blockDim.x >> 5) ? s_buf[threadIdx.x] : tmp;
     val = warp_all_reduce_sum_mdf(val);

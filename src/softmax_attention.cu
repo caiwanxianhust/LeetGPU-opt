@@ -22,6 +22,7 @@ Matrix Q is of size M×d and matrices K and V are of size N×d
 */
 
 
+namespace flash_attention_naive {
 
 // flash attention kernel
 template <int Bc>
@@ -34,7 +35,7 @@ __global__ void flash_softmax_attention_naive_kernel(const float* Q, const float
 
     // 显式初始化共享变量
     if (threadIdx.x == 0) {
-        s_row_ml_prev.m = -FLT_MAX;
+        s_row_ml_prev.m = -1e20f;
         s_row_ml_prev.d = 0.0f;
     }
     __syncthreads();
@@ -69,7 +70,7 @@ __global__ void flash_softmax_attention_naive_kernel(const float* Q, const float
 
         // Compute softmax and weighted sum
         MD_F row_ml, tmp;
-        row_ml.m = -FLT_MAX;
+        row_ml.m = -1e20f;
         row_ml.d = 0.0f;
         for (int i=threadIdx.x; i<Bc && (j+i)<N; i+=blockDim.x) {
             tmp.m = s_qk[i];
@@ -81,9 +82,10 @@ __global__ void flash_softmax_attention_naive_kernel(const float* Q, const float
         // Combine with previous blocks
         MD_F row_ml_new = MDF_Op()(s_row_ml_prev, row_ml);
 
-        float rlf = 1.0f / row_ml_new.d;
+        float rlf = 1.0f / (row_ml_new.d + 1e-5f);
         float exp_m_diff = expf(s_row_ml_prev.m - row_ml_new.m);
         float exp_m_curr = expf(row_ml.m - row_ml_new.m);
+
 
         for (int k = threadIdx.x; k < d; k += blockDim.x) {
             float pv = 0.0f;
@@ -104,6 +106,7 @@ __global__ void flash_softmax_attention_naive_kernel(const float* Q, const float
 
 void flash_softmax_attention_naive_cuda(const float* Q, const float* K, const float* V, float* output, int M, int N, int d)
 {
+    printf("flash_softmax_attention_naive_cuda, M=%d, N=%d, d=%d\n", M, N, d);
     int block_size = 256;
     int grid_size = M; // One block per output row
     constexpr int Bc = 256;
@@ -114,8 +117,9 @@ void flash_softmax_attention_naive_cuda(const float* Q, const float* K, const fl
 }
 
 
-namespace {
+}   // namespace flash_attention_naive
 
+namespace matmul_pipline {
 
 
 // 定义宏，用于将 float 数组强制转换为 float4 类型，实现向量化访问
@@ -155,8 +159,6 @@ constexpr int THREAD_C_Y_TILE_SIZE = BLOCK_M / THREAD_C_LAYOUT_Y; // 128 / 16 = 
 constexpr int THREAD_C_WARP_X = 4;
 constexpr int THREAD_C_WARP_Y = 32 / THREAD_C_WARP_X; // 8
 constexpr int THREAD_C_WARP_DIM_X = THREAD_C_LAYOUT_X / THREAD_C_WARP_X; // 4
-
-}
 
 
 /**
@@ -539,12 +541,13 @@ static void softmax_attention_unfused_cuda(
     CHECK_CUDA_ERROR(cudaFree(buf));
 }
 
+}   // namespace matmul_pipline
 
 
 void softmax_attention_cuda(const float* Q, const float* K, const float* V, float* output, int M, int N, int d)
 {
-    // flash_softmax_attention_naive_cuda(Q, K, V, output, M, N, d);
-    softmax_attention_unfused_cuda(Q, K, V, output, M, N, d);
+    flash_attention_naive::flash_softmax_attention_naive_cuda(Q, K, V, output, M, N, d);
+    // matmul_pipline::softmax_attention_unfused_cuda(Q, K, V, output, M, N, d);
 }
 
 
@@ -567,7 +570,7 @@ torch::Tensor softmax_attention(
     TORCH_CHECK(K.size(0) == V.size(0), "Input tensors must have compatible shapes");
     int M = Q.size(0), N = K.size(0), d = Q.size(1);
     auto options = Q.options();
-    torch::Tensor output = torch::empty({M, d}, options);
+    torch::Tensor output = torch::zeros({M, d}, options);
     softmax_attention_cuda(
         Q.data_ptr<float>(),
         K.data_ptr<float>(),

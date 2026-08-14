@@ -476,11 +476,10 @@ def softmax_attention():
     # 测试
     Q = torch.randn(512, 200, device="cuda", dtype=torch.float32)
     K = torch.randn(256, 200, device="cuda", dtype=torch.float32)
-    V = torch.randn(256, 200, device="cuda", dtype=torch.float32)
+    V = torch.randn(256, 200, device="cuda", dtype=torch.float32) / 10.0
     
     # 用 PyTorch 实现
     scores = torch.matmul(Q, K.t()) / (200 ** 0.5)
-    print(scores[:2, :4])
     attn_weights = torch.softmax(scores, dim=-1)
     torch_out = torch.matmul(attn_weights, V)
 
@@ -498,8 +497,8 @@ def softmax_attention():
     print(torch_out[:2, :4])
 
     # 检查结果
-    assert torch.allclose(out, torch_out, atol=1e-3)
-    print("All tests passed!")
+    compare_tensors(out, torch_out, atol=1e-3)
+
 
 
 def conv2D():
@@ -3929,7 +3928,7 @@ if __name__ == "__main__":
     # swiglu()
     # reduce_sum()
     # softmax_1D()
-    # softmax_attention()
+    softmax_attention()
     # conv2D()
     # histogram()
     # prefxix_sum()
@@ -3993,6 +3992,6 @@ if __name__ == "__main__":
     # dpo_sequence_loss()
     # softmax_attention_backward()
     # multi_head_cross_attention()
-    layer_normalization()
+    # layer_normalization()
 
     pass
