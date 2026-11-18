@@ -9,6 +9,7 @@ RTX 4060 Laptop（sm_89, 8 GB）· CUDA 12.8 · torch 2.9.0+cu128
 | 日期 | commit | kernel | shape | dtype | median ms | min ms | vs 上一版 | vs PyTorch | 改动 |
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-11-18 | a78a189 | fused_layernorm_linear_gelu | 4096x4096x4096 | fp32 | 21.006 | 19.297 | 基线 | 待测 | naive |
+| 2026-11-18 | 7aadc5a | fused_layernorm_linear_gelu | 4096x4096x4096 | fp32 | 19.767 | 19.201 | —（同代码漂移） | 1.1x | gate 框架自检，kernel 未改 |
 
 ## 噪声带
 
