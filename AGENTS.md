@@ -83,3 +83,54 @@ sudo ncu --set full -o profile/report_linear_recurrence --launch-timeout 60000 p
 3. **提交前运行 `git status --porcelain` 确认没有多余的未跟踪文件。** 期望输出为空，或只剩本次有意提交的文件；出现意料外的未跟踪文件先清理再提交。
 4. **构建 / 测试 / 跑分必须在 Full access 权限下进行。** workspace-write 沙箱下 `torch.cuda.is_available()` 返回 `False` 并报 `CUDA error 304: OS call failed or operation not supported on this OS`（沙箱挡住了 `/dev/dxg` 的设备 ioctl），而 `nvidia-smi` 一切正常。实测同一命令提到 Full access 后立刻变成 `cuda_avail = True`、设备名正常、kernel 跑通。看到 304 先提权重试，不要改代码、不要当成 GPU 或驱动故障。
 5. **性能结论必须是同形状、同精度、同 GPU 的前后对比。** shape / dtype / 设备任一不同就不允许下"更快/更慢"的结论；要写明对比依据（ncu 指标，或多次计时的中位数），`test.py` 的单次墙钟只能用于粗筛。
+
+
+## 工作流 A：新增 kernel
+
+顺序不可颠倒；**没有测试就不写 kernel**。
+
+1. 定名 `<name>`（snake_case）。`test.py` 的函数名、`src/<name>.cu`、`bindings.cu` 里的
+   `m.def("<name>", ...)`、`bench.py` 里的 builder 名**必须完全一致**。
+2. 先在 `test.py` 写测试函数：固定 seed 造输入 → 调 `leetgpu.<name>` → `compare_tensors()`
+   对比同 dtype / 同 device 的 PyTorch 参考 → 打印耗时。
+3. 写 naive 实现 `src/<name>.cu`；在 `bindings.cu` 的 `PYBIND11_MODULE` 里加一行 `m.def`；
+   在 `bench.py` 里加对应 builder（形状与 `test.py` 一致）。
+4. `python3 setup.py build_ext --inplace`
+5. **门 A1（正确性）**：`python3 -c 'import test; test.<name>()'` → 必须 `All tests passed!`
+6. **门 A2（基线）**：`python3 bench.py <name>` 跑 2 个独立进程，记录 median / min。
+7. 提交：`git commit -m "feat(<name>): naive kernel (median X ms)"`。
+   naive 版本必须先入库——它是后面每次优化的回退点。
+8. 进入工作流 B。
+
+## 工作流 B：优化 kernel（单变量、可回退）
+
+0. 前置：工作区干净；当前 HEAD 就是基线。
+1. 冻结基线：`python3 bench.py <name>` ×2 进程，median 与 `BENCH.md` 最后一行对得上才开工。
+2. 剖析：
+   `sudo ncu --set full -o /tmp/report_<name> python3 profile/profile_<name>.py`
+   读 SOL：受限于 Compute 还是 Memory？achieved occupancy？有没有 bank conflict / 未合并访存？
+3. **先假设后改码**：写 3 条「改动 → 预期哪个指标变化 → 预估收益」，等用户确认。
+4. 一次只实现一条假设（单变量）。
+5. 每改完立刻过门：
+   - **门 B1**：编译通过。
+   - **门 B2**：`python3 -c 'import test; test.<name>()'` 全过。**禁止放宽 atol/rtol 来凑通过。**
+   - **门 B3**：`python3 bench.py <name>` ×2 进程，median 下降 ≥5% 且两个进程方向一致。
+6. 通过则提交：`git commit -m "perf(<name>): <改动> (X → Y ms)"`，**一条假设一条 commit**。
+   不通过则 `git checkout -- src/<name>.cu` 回退，在回复里写下"假设 Hn 无效"。
+7. 提交后在 `BENCH.md` 追加一行。
+
+## 门与记录
+
+| 门 | 命令 | 通过标准 |
+|---|---|---|
+| B1 编译 | `python3 setup.py build_ext --inplace` | 退出 0 |
+| B2 正确性 | `python3 -c 'import test; test.<name>()'` | `All tests passed!` |
+| B3 性能 | `python3 bench.py <name>` ×2 | median 降 ≥5%，两进程一致 |
+| B4 卫生 | `git status --porcelain` | 只有本次预期的改动 |
+| B5 记录 | `BENCH.md` 末尾追加一行 | 一次提交 = 一行 |
+
+- 每个任务开始时，先读 `BENCH.md` 最后 5 行 + `git log --oneline -5`，不要靠对话记忆。
+- 一次只动一个 kernel。顺手"优化"别的文件属于越界，先报告再等确认。
+- 跑分数字必须同形状 / 同精度 / 同 GPU；单次墙钟只能粗筛。
+- 测量路径不能改：`bench.py` 走的就是 `test.py` 的调用路径（含输出分配），
+  把分配挪到调用方就不算优化。
