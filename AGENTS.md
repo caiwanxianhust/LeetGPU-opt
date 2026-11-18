@@ -9,14 +9,17 @@
 ## 目录约定
 
 ```
-setup.py        # 唯一构建入口（setuptools + torch.utils.cpp_extension.CUDAExtension）
-test.py         # 自测脚本（非 pytest）。~90 个 kernel 各一个测试函数
-bench.py        # 唯一输入构造 + 测量入口（CSV / --markdown / --ncu / --ref torch）
-BENCH.md        # 跑分账本：一提交一行 + 噪声带记录
-tools/gate.sh   # 门禁执行器：B1 build → B2 正确性 → B3 性能 → B4 卫生
+setup.py        # 唯一构建入口（内存感知 MAX_JOBS + CUDAExtension）
+test.py         # 【legacy】存量 kernel 的正确性测试（非 pytest）
+harness/        # 评估框架：spec / registry / measure / judge / store / report / cli
+  kernels.py    #   ← 新 kernel 的输入规格、参考实现、容差、成本模型都写这里
+bench.py        # 兼容壳：转发到 python3 -m harness run
+BENCH.json      # 机器可读测量历史（含 so_sha256、commit、GPU 指纹）
+BENCH.md        # 人读账本；表格由 harness report 生成，散文手写
+tools/gate.sh   # 门禁：B1 build → B2 check → B3 run+compare → B4 卫生 → B5 记账
 src/            # 97 个 *.cu（一个题目一个文件）+ cuda_kernels.cuh + utils.cuh
 src/bindings.cu # 顶部集中声明全部签名 + PYBIND11_MODULE 里 92 个 m.def 注册点
-profile/        # 【legacy】4 个 ncu 剖析脚本；新 kernel 用 bench.py --ncu 代替
+profile/        # 【legacy】4 个 ncu 剖析脚本；新 kernel 用 harness run --ncu 代替
 build/          # setuptools 中间产物（已 gitignore）
 leetgpu.cpython-310-x86_64-linux-gnu.so  # 就地构建的扩展（已 gitignore）
 ```
@@ -45,7 +48,11 @@ cd /home/houlai/resumeProject/hpc/leetgpu
 python3 setup.py build_ext --inplace
 ```
 
-- `setup.py` 默认 `MAX_JOBS=1`（省内存；全量 97 个 `.cu` 很慢）。本地可 `MAX_JOBS=4 python3 setup.py build_ext --inplace` 加速（本机 12 核 / 10 GB 可用内存）。
+- `MAX_JOBS` 由可用内存自动算：`jobs = (MemAvailable - 2 GiB) / 3.45 GiB`，夹在 `[1, nproc]`。
+  实测每个 nvcc 峰值 RSS **3.0–3.4 GiB**（大头是 `torch/extension.h`，与 kernel 大小无关；单个 TU 约 65 s），
+  本机 12 核 / 10.3 GiB 可用 → 自动选 **2**。**并行度受内存限制，不是核数**，手动调到 4 以上会 OOM（历史故障）。
+  显式 `MAX_JOBS=N` 优先；`LEETGPU_MEM_PER_JOB_MB` / `LEETGPU_MEM_RESERVE_MB` 可调。
+- `setup.py` 里用 `glob.glob("src/*.cu")` 全量编译；全量重建 ≈ 97 × 65 s / 2 ≈ 50 min，增量构建是常态。
 - 固定 `-arch=sm_89 -std=c++17`。换 GPU 架构需改 `setup.py`。
 - `--inplace` 把 `leetgpu*.so` 放到仓库根，`test.py` 才能直接 `import leetgpu`。
 
@@ -73,26 +80,31 @@ python3 -c 'import test; test.fused_layernorm_linear_gelu()'
 
 ## 跑分 / 剖析
 
-测量只有一个入口（stdout 是纯 CSV，过程信息走 stderr）：
+测量入口是 `harness`（`bench.py` 只是兼容壳）：
 
 ```bash
-python3 bench.py <name>              # name,shape,dtype,median_ms,min_ms
-python3 bench.py <name> --ref torch  # 同协议测 PyTorch 参考，供 BENCH.md 的 vs PyTorch 列
-python3 bench.py <name> --markdown   # 直接输出一行 BENCH.md 表格
+python3 -m harness run <name> --procs 3 --ref torch   # 3 个独立进程 + torch 参考
+python3 -m harness run <name> > out.csv               # 单行 CSV: name,shape,dtype,median_ms,min_ms
+python3 -m harness check <name>                       # 只做正确性（spec 的 reference + tol）
+python3 -m harness compare base.json cand.json        # 判定 accept/reject（8% + 3×SE + p90 尾部）
+python3 -m harness report                             # 用 BENCH.json 重写 BENCH.md 表格
+python3 -m harness selftest                           # 判定逻辑单测，不需要 GPU
 ```
 
-剖析用 ncu 包 `bench.py --ncu`（先 warmup 5 次，再只跑 1 次；`-s 5 -c 1` 只采最后一次 launch）：
+新 kernel 的**输入规格、torch 参考、容差、成本模型**全部写在 `harness/kernels.py` 的 `Spec` 里；
+形状只写一处，不再和 `test.py` 双写。
+
+剖析用 ncu 包 `harness run --ncu`（warmup 5 次后只跑 1 次；`-s 5 -c 1` 只采最后一次 launch）：
 
 ```bash
-sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 bench.py <name> --ncu
+sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 -m harness run <name> --ncu
 # kernel 内部若 launch 多个 kernel（如 twopass 实现），把 -c 调大
 ```
 
 `profile/*.py` 是 **legacy**（只覆盖 matmul / lora_linear / attention_with_linear_bias / linear_recurrence
-这 4 个），新 kernel 不要再加剖析脚本；`profile/profile_linear_recurrence.py` 注释里的
-`profile_kernels.py` 并不存在，别照抄。
+这 4 个），新 kernel 不要再加剖析脚本。
 
-`test.py` 里的耗时是单次 `time.time()` 墙钟，噪声大；**判定只认 `bench.py` + `tools/gate.sh`**。
+`test.py` 里的耗时是单次 `time.time()` 墙钟，噪声大；**判定只认 `harness` + `tools/gate.sh`**。
 
 ## 家规
 
@@ -107,46 +119,48 @@ sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 bench.py <name> --nc
 
 顺序不可颠倒；**没有测试就不写 kernel**。
 
-1. 定名 `<name>`（snake_case）。`test.py` 的函数名、`src/<name>.cu`、`bindings.cu` 里的
-   `m.def("<name>", ...)`、`bench.py` 里的 registry key **必须完全一致**。
+1. 定名 `<name>`（snake_case）。该名要同时是：`src/<name>.cu` 文件名、`bindings.cu` 里的
+   `m.def("<name>", ...)`、`harness/kernels.py` 里 `Spec.name`。三者必须完全一致。
    （存量有 27/92 不同名，如 `vector_add`↔`vector_addition`、`fused_ln_linear_gelu`↔
-   `fused_layernorm_linear_gelu`；**不要改名**，只在 `bench.py` 的 `test_fn` 字段里显式映射。）
-2. 先在 `test.py` 写测试函数：固定 seed 造输入 → 调 `leetgpu.<name>` →
-   **`assert compare_tensors(...)`** 对比同 dtype / 同 device 的 PyTorch 参考 → 打印耗时。
-   `assert` 不能省：存量 72 处 `compare_tensors(...)` 丢弃了返回值，比较失败也 exit 0，
-   门禁无法机器判定。也**禁止为凑通过放宽 atol/rtol**。
+   `fused_layernorm_linear_gelu`；**不要改名**，用 `Spec.test_fn` 字段做映射。）
+2. 先在 `harness/kernels.py` 写 `Spec`：`make_inputs(seed)` 固定 seed 造输入、
+   `reference` 是 torch 参考、`tol` 是容差、`shape`/`flops`/`nbytes` 供报告。
+   正确性由 `python3 -m harness check <name>` 机器判定（allclose）。
+   若还想兼容 legacy `test.py`，再补一个同名测试函数并用 `assert compare_tensors(...)`——
+   **不要为凑通过放宽 atol/rtol**。
 3. 写 naive 实现 `src/<name>.cu`；然后在 `bindings.cu` 里改**两处**：
    ① 顶部声明区加一行 `torch::Tensor <name>(...);`（否则 `m.def` 引用不到，B1 直接编译失败）；
    ② `PYBIND11_MODULE` 里加一行 `m.def("<name>", &<name>, "...");`。
-   最后在 `bench.py` 的 `KERNELS` 加一条 registry（`build` 里的形状与 `test.py` 完全一致）。
 4. 跑门禁：`bash tools/gate.sh <name> --baseline`
-   （内含 B1 构建 + B2 正确性 + B3 基线 + B4 卫生，一条命令给出 PASS/FAIL 和可粘贴的 `BENCH.md` 行）。
-5. **门 A1（正确性）**：gate 的 B2 必须 PASS。判据是退出码 0 且输出无 `mismatch` 标记。
+   （B1 构建 + B2 `harness check` + B3 测量 + B4 卫生 + B5 记账，一条命令给出 PASS/FAIL）。
+5. **门 A1（正确性）**：gate 的 B2 必须 PASS（`harness check` 退出 0，`max|diff|` 在 `tol` 内）。
 6. **门 A2（基线）**：gate 的 B3 以 `--baseline` 模式 PASS，记录 median-of-medians / min。
-7. 提交：`git commit -m "feat(<name>): naive kernel (median X ms)"`，并把 gate 给出的行填进 `BENCH.md`。
+7. 提交：`git commit -m "feat(<name>): naive kernel (median X ms)"`。
+   gate 通过后已自动写入 `BENCH.json` 并刷新 `BENCH.md` 表格，随同提交即可。
    naive 版本必须先入库——它是后面每次优化的回退点。
 8. 进入工作流 B。
 
 ## 工作流 B：优化 kernel（单变量、可回退）
 
 0. 前置：工作区干净；当前 HEAD 就是基线（`git status --porcelain` 为空）。
-1. 冻结基线：`python3 bench.py <name>` ×3 进程，median-of-medians 与 `BENCH.md` 最后一行
-   在噪声带内才开工（对不上先查代码/浮点设置有没有变）。
-2. 剖析：`sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 bench.py <name> --ncu`
+1. 冻结基线：`python3 -m harness run <name> --procs 3`，与 `BENCH.json` 里该 kernel 的最后一条
+   在噪声带内才开工（`python3 -m harness compare <那条> <本次>` 会直接告诉你是否可比）。
+2. 剖析：`sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 -m harness run <name> --ncu`
    读 SOL：受限于 Compute 还是 Memory？achieved occupancy？有没有 bank conflict / 未合并访存？
 3. **先假设后改码**：写 3 条「改动 → 预期哪个指标变化 → 预估收益」，等用户确认。
 4. 一次只实现一条假设（单变量）。
 5. 每改完立刻过门：`bash tools/gate.sh <name>`
    - **B1 编译**：退出 0。
-   - **B2 正确性**：exit 0 且输出无 `mismatch`。**禁止放宽 atol/rtol 来凑通过。**
-   - **B3 性能**：3 进程 median-of-medians，相对 `BENCH.md` 最后一行降 **≥8%**，且跨进程跨度 ≤8%。
-     （依据见 `BENCH.md` 噪声带：单进程 median 波动 9.9%，3 进程标准误 ≈2%，故 8% ≈ 4σ。阈值 5% 会误判。）
+   - **B2 正确性**：`harness check` 退出 0。**禁止放宽 atol/rtol 来凑通过。**
+   - **B3 性能**：3 进程 median-of-medians，由 `harness compare` 判定
+     （`gain ≥ max(8%, 3×噪声SE)` 且 `p90` 不劣化 2%）。
    - **B4 卫生**：只有预期路径改动。
 6. 通过则提交：`git commit -m "perf(<name>): <改动> (X → Y ms)"`，**一条假设一条 commit**。
    不通过则回退——改动可能不止一个文件，别只 checkout 一个：
    `git restore --source=HEAD --worktree -- src/<name>.cu src/bindings.cu src/cuda_kernels.cuh src/utils.cuh`
    然后在回复里写下"假设 Hn 无效"。
-7. 提交后在 `BENCH.md` 追加 gate 给出的行，并在「噪声带」表补该 kernel 的实测区间。
+7. gate 通过时已自动追加 `BENCH.json` 并刷新 `BENCH.md` 表格；你只需把「噪声带」表里
+   该 kernel 的实测区间补上（人写部分不会被 `harness report` 覆盖）。
 
 > 硬约束：
 > - 改 `cuda_kernels.cuh` / `utils.cuh` 视为影响全部 97 个 kernel，必须补跑受影响 kernel 的 B2。
@@ -157,15 +171,16 @@ sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 bench.py <name> --nc
 
 | 门 | 命令 | 通过标准 |
 |---|---|---|
-| B1 编译 | gate 内 `python3 setup.py build_ext --inplace` | 退出 0 |
-| B2 正确性 | gate 内 `python3 -c 'import test; test.<fn>()'` | exit 0 **且** 输出无 `mismatch` |
-| B3 性能 | `bash tools/gate.sh <name>`（3 进程） | median-of-medians 降 ≥8%，跨度 ≤8% |
-| B4 卫生 | gate 内 `git status --porcelain` | 只有预期路径 |
-| B5 记录 | `BENCH.md` 追加一行 | 一次提交 = 一行 |
+| B0 注册 | gate 内 `registry.resolve(<name>)` | kernel 有 Spec |
+| B1 编译 | `python3 setup.py build_ext --inplace` | 退出 0 |
+| B2 正确性 | `python3 -m harness check <name>` | 退出 0（allclose 在 `tol` 内） |
+| B3 性能 | `harness run --procs 3` + `harness compare` | `gain ≥ max(8%, 3×SE)` 且 p90 不劣化 2% |
+| B4 卫生 | `git status --porcelain` | 只有预期路径 |
+| B5 记录 | 自动追加 `BENCH.json` + 刷新 `BENCH.md` | 仅在全部门 PASS 时写 |
 
 - 一条命令跑完全部门：`bash tools/gate.sh <name>`（新 kernel 加 `--baseline`，只重测可加 `--no-build`）。
-- 每个任务开始时，先读 `BENCH.md` 最后 5 行 + `git log --oneline -5`，不要靠对话记忆。
+- 每个任务开始时，先读 `BENCH.json` 里该 kernel 的最后一条 + `git log --oneline -5`，不要靠对话记忆。
 - 一次只动一个 kernel。顺手"优化"别的文件属于越界，先报告再等确认。
 - 跑分数字必须同形状 / 同精度 / 同 GPU；单次墙钟只能粗筛。
-- 测量路径不能改：`bench.py` 走的就是 `test.py` 的调用路径（含输出分配），
-  把分配挪到调用方就不算优化。
+- 测量路径不能改：`Spec.make_inputs` 造输入后**直接调 pybind 入口**，与真实用法一致（含 kernel 内部
+  的输出分配）；把分配挪到调用方就不算优化。
