@@ -3907,8 +3907,387 @@ def layer_normalization():
     compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
 
 
+def gelu():
+    # 测试数据
+    N = 100000000
+    x = torch.randn(N, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_gelu(x):
+        return leetgpu.gelu(x)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_gelu(x):
+        return torch.nn.functional.gelu(x)
+
+    # 运行测试
+    output_leetgpu = leetgpu_gelu(x)
+    print("LeetGPU:", output_leetgpu[:10])
+    output_pytorch = pytorch_gelu(x)
+    print("PyTorch:", output_pytorch[:10])
+
+    # 验证结果  
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
 
 
+def distillation_kl_divergence():
+    N = 2048
+    V = 128256
+    temperature = 2.0
+
+    # 测试数据
+    teacher_logits = torch.randn(N, V, device="cuda", dtype=torch.float32)
+    student_logits = torch.randn(N, V, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_distillation_kl_divergence(teacher_logits, student_logits, temperature):
+        return leetgpu.distillation_kl_divergence(teacher_logits, student_logits, temperature)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_distillation_kl_divergence(teacher_logits, student_logits, temperature):
+        T = float(temperature)
+        a = teacher_logits.div(T)          # 新张量，不污染输入
+        b = student_logits.div(T)
+        diff = a.sub(b)                    # a - b
+
+        amax = a.amax(dim=-1, keepdim=True)
+        bmax = b.amax(dim=-1, keepdim=True)
+
+        a.sub_(amax).exp_()                # a := e^{a-amax} ∈ (0,1]
+        b.sub_(bmax).exp_()
+        sa = a.sum(dim=-1)                 # Σ e^{a-amax}
+        sb = b.sum(dim=-1)
+
+        a.mul_(diff)                       # a := e^{a-amax}·(a-b)
+        num = a.sum(dim=-1).div_(sa)       # Σⱼ pⱼ·(aⱼ-bⱼ)
+        lse_a = sa.log_().add_(amax.squeeze(-1))
+        lse_b = sb.log_().add_(bmax.squeeze(-1))
+        kl = num.sub_(lse_a).add_(lse_b)
+        return kl
+
+    # 运行测试
+    output_leetgpu = leetgpu_distillation_kl_divergence(teacher_logits, student_logits, temperature)
+    print("LeetGPU:", output_leetgpu[:10])
+    output_pytorch = pytorch_distillation_kl_divergence(teacher_logits, student_logits, temperature)
+    print("PyTorch:", output_pytorch[:10])
+
+    # 验证结果
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
+
+
+def integral_image():
+    # 测试数据
+    H, W = 8192, 8192
+    image = torch.randn(H, W, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_integral_image(image):
+        return leetgpu.integral_image(image)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_integral_image(image):
+        """
+        计算积分图 (Integral Image)
+        
+        Args:
+            image: 输入图像，shape [H, W]
+            
+        Returns:
+            integral: 积分图，shape [H, W]
+        """
+        # 使用 cumsum 两次计算积分图
+        integral = image.cumsum(dim=0).cumsum(dim=1)
+        return integral
+
+    # 运行测试
+    output_leetgpu = leetgpu_integral_image(image)
+    print("LeetGPU:", output_leetgpu[:5, :5])
+    output_pytorch = pytorch_integral_image(image)
+    print("PyTorch:", output_pytorch[:5, :5])
+
+    # 验证结果  
+    compare_tensors(output_leetgpu, output_pytorch, 1e-1, 1e-1)
+
+
+def grouped_gemm():
+    # 测试数据
+    G, M_total, N, K = 16, 128, 256, 512
+    A = torch.randn(M_total, K, device="cuda", dtype=torch.float32)
+    B = torch.randn(G, K, N, device="cuda", dtype=torch.float32)
+    group_offsets = torch.arange(0, G + 1, device="cuda", dtype=torch.int32) * M_total // G
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_grouped_gemm(A, B, group_offsets):
+        return leetgpu.grouped_gemm(A, B, group_offsets)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_grouped_gemm(A, B, group_offsets):
+        C = torch.zeros(A.shape[0], B.shape[2], device=A.device, dtype=A.dtype)  # (M_total, N)
+        offsets = group_offsets.tolist()        # (G+1,) int -> python list
+        G = B.shape[0]
+        for g in range(G):
+            s, e = offsets[g], offsets[g + 1]
+            if e > s:                            # 跳过空组
+                C[s:e] = A[s:e] @ B[g]           # (e-s, K) @ (K, N) -> (e-s, N)
+        return C
+
+    # 运行测试
+    output_leetgpu = leetgpu_grouped_gemm(A, B, group_offsets)
+    print("LeetGPU:", output_leetgpu.shape)
+    output_pytorch = pytorch_grouped_gemm(A, B, group_offsets)
+    print("PyTorch:", output_pytorch.shape)
+
+    # 验证结果  
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
+
+
+def rms_norm_backward():
+    # 测试数据
+    M, C = 65536, 4096
+    x = torch.randn(M, C, device="cuda", dtype=torch.float32)
+    weight = torch.randn(C, device="cuda", dtype=torch.float32)
+    dy = torch.randn(M, C, device="cuda", dtype=torch.float32)
+    eps = 1e-5
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_rms_norm_backward(x, weight, dy, eps):
+        return leetgpu.rms_norm_backward(x, weight, dy, eps)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_rms_norm_backward(x, weight, dy, eps):
+        """
+        实现 RMS Normalization 的反向传播
+        
+        Args:
+            x: 输入张量，shape [M, C]
+            weight: 缩放因子，shape [C]
+            dy: 上游梯度，shape [M, C]
+            eps: 平滑项
+            
+        Returns:
+            dx: 输入的梯度，shape [M, C]
+            dweight: 权重的梯度，shape [C]
+        """
+        # 1. 计算均方根 (RMS)
+        rms = torch.sqrt(torch.mean(x ** 2, dim=1, keepdim=True) + eps)  # shape [M, 1]
+        
+        # 2. 计算归一化输出
+        y = x / rms  # shape [M, C]
+        
+        # 3. 计算权重的梯度
+        dweight = torch.sum(dy * y, dim=0)  # shape [C]
+        
+        # 4. 计算输入的梯度
+        dx = (dy * weight) / rms - (torch.mean(dy * weight * y, dim=1, keepdim=True) * y) / rms
+        
+        return dx, dweight
+
+    # 运行测试
+    dx_leetgpu, dweight_leetgpu = leetgpu_rms_norm_backward(x, weight, dy, eps)
+    print("LeetGPU:", dx_leetgpu[:5, :5], dweight_leetgpu[:5])
+    dx_pytorch, dweight_pytorch = pytorch_rms_norm_backward(x, weight, dy, eps)
+    print("PyTorch:", dx_pytorch[:5, :5], dweight_pytorch[:5])
+
+    # 验证结果
+    compare_tensors(dx_leetgpu, dx_pytorch, 1e-3, 1e-3)
+    compare_tensors(dweight_leetgpu, dweight_pytorch, 1e-3, 1e-3)
+
+
+def layer_norm_backward():
+    # 测试数据
+    M, C = 16384, 4096
+    x = torch.randn(M, C, device="cuda", dtype=torch.float32)
+    gamma = torch.randn(C, device="cuda", dtype=torch.float32)
+    mean = torch.mean(x, dim=1, keepdim=True)
+    rstd = 1.0 / torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5)
+    dy = torch.randn(M, C, device="cuda", dtype=torch.float32)
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_layer_norm_backward(x, gamma, mean, rstd, dy):
+        return leetgpu.layer_norm_backward(x, gamma, mean, rstd, dy)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_layer_norm_backward(x, gamma, mean, rstd, dy):
+        N, C = x.shape
+        mean = mean.reshape(-1, 1)        # 无论传入 (N,) / (N,1) / (1,N) 都归一成 (N,1)
+        rstd = rstd.reshape(-1, 1)        # 同上
+        gamma = gamma.reshape(1, -1)      # 归一成 (1,C)
+        xhat = (x - mean) * rstd
+        g = dy * gamma
+        sum_g = g.sum(1, keepdim=True)
+        sum_g_xhat = (g * xhat).sum(1, keepdim=True)
+        dx = rstd * (g - sum_g / C - xhat * (sum_g_xhat / C))
+        dgamma = (dy * xhat).sum(0)
+        dbeta = dy.sum(0)
+        return dx, dgamma, dbeta
+
+
+    # 运行测试
+    dx_leetgpu, dgamma_leetgpu, dbeta_leetgpu = leetgpu_layer_norm_backward(x, gamma, mean, rstd, dy)
+    print("LeetGPU:", dx_leetgpu[:5, :5], dgamma_leetgpu[:5], dbeta_leetgpu[:5])
+    dx_pytorch, dgamma_pytorch, dbeta_pytorch = pytorch_layer_norm_backward(x, gamma, mean, rstd, dy)
+    print("PyTorch:", dx_pytorch[:5, :5], dgamma_pytorch[:5], dbeta_pytorch[:5])
+
+    # 验证结果
+    compare_tensors(dx_leetgpu, dx_pytorch, 1e-3, 1e-3)
+    compare_tensors(dgamma_leetgpu, dgamma_pytorch, 1e-3, 1e-3)
+    compare_tensors(dbeta_leetgpu, dbeta_pytorch, 1e-3, 1e-3)
+
+
+def multi_lora_batched_linear():
+    """
+    Implement the batched multi-adapter LoRA projection used by multi-tenant LLM servers (Punica / S-LoRA, vLLM multi-LoRA). A batch of T tokens x (T × K) shares one base weight W (K × N), but each token may belong to a different fine-tuned adapter selected from a pool of L low-rank adapters A (L × K × R) and B (L × R × N). With a = adapter_ids[t]:
+    """
+    # 测试数据
+    T, K, N, R, L = 1024, 4096, 4096, 16, 8
+    x = torch.randn(T, K, device="cuda", dtype=torch.float32)
+    W = torch.randn(K, N, device="cuda", dtype=torch.float32)
+    A = torch.randn(L, K, R, device="cuda", dtype=torch.float32)
+    B = torch.randn(L, R, N, device="cuda", dtype=torch.float32)
+    adapter_ids = torch.randint(-1, L, (T,), device="cuda", dtype=torch.int32)  # -1 表示不使用 LoRA
+    scale = 0.1
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_multi_lora_batched_linear(x, W, A, B, adapter_ids, scale):
+        return leetgpu.multi_lora_batched_linear(x, W, A, B, adapter_ids, scale)
+
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_multi_lora_batched_linear(x, W, A, B, adapter_ids, scale):
+        y = x @ W                                   # base 分支：(T,N)，所有 token 共享 W
+        ids = adapter_ids.clamp_min(0)              # -1 不能直接 gather，先 clamp 到 0（占位，后面 mask 清零）
+        A_sel = A[ids]; B_sel = B[ids]              # (T,K,R) / (T,R,N)，按 token 选出各自 adapter
+        mid = torch.bmm(x.unsqueeze(1), A_sel).squeeze(1)   # (T,R)  = x_t @ A_a
+        lora = torch.bmm(mid.unsqueeze(1), B_sel).squeeze(1)# (T,N)  = mid_t @ B_a
+        mask = (adapter_ids >= 0).to(x.dtype).unsqueeze(1)  # (T,1)
+        y = y + scale * lora * mask                 # -1 的 token 这一项被 mask 成 0
+        return y
+
+    # 运行测试
+    output_leetgpu = leetgpu_multi_lora_batched_linear(x, W, A, B, adapter_ids, scale)
+    print("LeetGPU:", output_leetgpu[:5, :5])
+    output_pytorch = pytorch_multi_lora_batched_linear(x, W, A, B, adapter_ids, scale)
+    print("PyTorch:", output_pytorch[:5, :5])
+
+    # 验证结果
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
+
+
+def fused_adamw():
+    # 测试数据
+    N, t = 65536, 100
+    params = torch.randn(N, device="cuda", dtype=torch.float32)
+    grad = torch.randn(N, device="cuda", dtype=torch.float32)
+    m = torch.zeros(N, device="cuda", dtype=torch.float32)
+    v = torch.zeros(N, device="cuda", dtype=torch.float32)
+    lr = 1e-3
+    beta1, beta2 = 0.9, 0.999
+    eps = 1e-8
+    weight_decay = 0.01
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_fused_adamw(params, grad, m, v, lr, beta1, beta2, eps, weight_decay, t):
+        return leetgpu.fused_adamw(params, grad, m, v, lr, beta1, beta2, eps, weight_decay, t)
+
+    # 用 Pytorch 实现
+    @timeit
+    def pytorch_fused_adamw(params, grad, m, v, lr, beta1, beta2, eps, weight_decay, t):
+        """单步 AdamW，纯 tensor op（9 个 kernel，约 22 次全量访存）。"""
+        # (1) 解耦权重衰减：直接乘在更新前的 params 上（不进梯度、不过矩估计）
+        params.mul_(1.0 - lr * weight_decay)
+        # (2)(3) 更新一阶 / 二阶矩
+        m.mul_(beta1).add_(grad, alpha=1.0 - beta1)
+        v.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
+        # (4) bias 校正。用新 tensor 计算，避免污染 m / v 里的原始矩
+        bias_c1 = 1.0 - beta1 ** t
+        bias_c2 = 1.0 - beta2 ** t
+        # (5) theta -= lr * m_hat / (sqrt(v_hat) + eps)
+        #     denom = sqrt(v / bias_c2) + eps
+        denom = v.div(bias_c2).sqrt_().add_(eps)
+        #     params += (-lr / bias_c1) * m / denom  ==  lr * (m / bias_c1) / denom
+        params.addcdiv_(m, denom, value=-lr / bias_c1)
+
+    # 运行测试
+    leetgpu_fused_adamw(params.clone(), grad.clone(), m.clone(), v.clone(), lr, beta1, beta2, eps, weight_decay, t)
+    pytorch_fused_adamw(params.clone(), grad.clone(), m.clone(), v.clone(), lr, beta1, beta2, eps, weight_decay, t)
+    print("LeetGPU:", params[:5], m[:5], v[:5])
+    print("PyTorch:", params[:5], m[:5], v[:5])
+
+    # 验证结果
+    compare_tensors(params, params, 1e-3, 1e-3)
+    compare_tensors(m, m, 1e-3, 1e-3)
+    compare_tensors(v, v, 1e-3, 1e-3)
+
+
+def fused_layernorm_linear_gelu():
+    # 测试数据
+    M, K, N = 4096, 4096, 4096
+    x = torch.randn(M, K, device="cuda", dtype=torch.float32)
+    gamma = torch.randn(N, device="cuda", dtype=torch.float32)
+    beta = torch.randn(N, device="cuda", dtype=torch.float32)
+    W = torch.randn(K, N, device="cuda", dtype=torch.float32)
+    bias = torch.randn(N, device="cuda", dtype=torch.float32)
+    eps = 1e-5
+
+    # 用 LeetGPU 实现
+    @timeit
+    def leetgpu_fused_layernorm_linear_gelu(x, gamma, beta, W, bias, eps):
+        return leetgpu.fused_ln_linear_gelu(x, gamma, beta, W, bias, eps)
+
+    # 用 PyTorch 实现
+    @timeit
+    def pytorch_fused_layernorm_linear_gelu(x, gamma, beta, W, bias, eps):
+        """
+        实现融合的 LayerNorm + Linear + GELU
+        
+        Args:
+            x: 输入张量，shape [M, K]
+            gamma: LayerNorm 的缩放因子，shape [N]
+            beta: LayerNorm 的偏置项，shape [N]
+            W: Linear 层的权重，shape [K, N]
+            bias: Linear 层的偏置项，shape [N]
+            eps: 平滑项
+            
+        Returns:
+            y: 输出张量，shape [M, N]
+        """
+        # 1. Layer Normalization
+        mean = x.mean(dim=1, keepdim=True)
+        var = x.var(dim=1, keepdim=True, unbiased=False)
+        x_norm = (x - mean) * gamma / torch.sqrt(var + eps) + beta
+        
+        # 2. Linear Transformation
+        linear_out = x_norm @ W + bias
+        
+        # 3. GELU Activation
+        y = torch.nn.functional.gelu(linear_out)
+        
+        return y
+
+    # 运行测试
+    output_leetgpu = leetgpu_fused_layernorm_linear_gelu(x, gamma, beta, W, bias, eps)
+    print("LeetGPU:", output_leetgpu[:5, :5])
+    output_pytorch = pytorch_fused_layernorm_linear_gelu(x, gamma, beta, W, bias, eps)
+    print("PyTorch:", output_pytorch[:5, :5])
+
+    # 验证结果
+    compare_tensors(output_leetgpu, output_pytorch, 1e-3, 1e-3)
+        
 
 
 if __name__ == "__main__":
@@ -3928,7 +4307,7 @@ if __name__ == "__main__":
     # swiglu()
     # reduce_sum()
     # softmax_1D()
-    softmax_attention()
+    # softmax_attention()
     # conv2D()
     # histogram()
     # prefxix_sum()
@@ -3993,5 +4372,15 @@ if __name__ == "__main__":
     # softmax_attention_backward()
     # multi_head_cross_attention()
     # layer_normalization()
+    # gelu()
+    # distillation_kl_divergence()
+    # integral_image()
+    # grouped_gemm()
+    # rms_norm_backward()
+    # layer_norm_backward()
+    # multi_lora_batched_linear()
+    # fused_adamw()
+    fused_layernorm_linear_gelu()
+
 
     pass

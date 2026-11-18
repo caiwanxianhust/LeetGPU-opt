@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "*.cu": "cpp",
+        "*.cuh": "cpp",
+        "cmath": "cpp",
+        "chrono": "cpp",
+        "numeric": "cpp",
+        "algorithm": "cpp",
+        "cfloat": "cpp",
+        "*.bak1": "cpp"
+    },
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.errorSquiggles": "disabled"
+}
+

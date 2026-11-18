@@ -41,7 +41,49 @@ __global__ void token_embedding_layer_kernel(
 }
 
 
+/**
+ * @brief CUDA kernel for token embedding layer with D=768
+ * @param token_ids: [B, T] int32
+ * @param position_ids: [T] int32
+ * @param token_embeddings: [V, D] float32
+ * @param position_embeddings: [P, D] float32
+ * @param gamma: [D] float32
+ * @param beta: [D] float32
+ * @param output: [B, T, D] float32
+ */
+static __global__ void token_embedding_layer_D768_kernel(
+    const int* token_ids, const int* position_ids, const float* token_embeddings,
+    const float* position_embeddings, const float* gamma, const float* beta,
+    float* output, int B, int T, int V, int P, int D, float eps)
+{
+    const int batch_id = blockIdx.y;    // batch index
+    const int seq_id = blockIdx.x;      // sequence index
+    const int token_id = token_ids[batch_id * T + seq_id];
+    const int pos_id = position_ids[seq_id];
 
+    float4 token_val = reinterpret_cast<const float4*>(token_embeddings + token_id * D)[threadIdx.x];
+    float4 pos_val = reinterpret_cast<const float4*>(position_embeddings + pos_id * D)[threadIdx.x];
+    float4 val = {token_val.x + pos_val.x, token_val.y + pos_val.y, token_val.z + pos_val.z, token_val.w + pos_val.w};
+    float4 gamma_val = reinterpret_cast<const float4*>(gamma)[threadIdx.x];
+    float4 beta_val = reinterpret_cast<const float4*>(beta)[threadIdx.x];
+
+    float mean = 0.0f;
+    float mean_sq = 0.0f;
+
+    mean += val.x + val.y + val.z + val.w;
+    mean_sq += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
+    __syncthreads();
+
+    mean = block_all_reduce_sum(mean) / (float)D;
+    mean_sq = block_all_reduce_sum(mean_sq) / (float)D;
+    float var = rsqrtf(mean_sq - mean * mean + eps);
+
+    reinterpret_cast<float4*>(output + batch_id * T * D + seq_id * D)[threadIdx.x] =
+        make_float4((val.x - mean) * var * gamma_val.x + beta_val.x,
+                    (val.y - mean) * var * gamma_val.y + beta_val.y,
+                    (val.z - mean) * var * gamma_val.z + beta_val.z,
+                    (val.w - mean) * var * gamma_val.w + beta_val.w);
+}
 
 
 /**
@@ -68,12 +110,20 @@ void token_embedding_layer_cuda(
     const float* position_embeddings, const float* gamma, const float* beta,
     float* output, int B, int T, int V, int P, int D, float eps) 
 {
+
+    if (D == 768)
+    {
+        token_embedding_layer_D768_kernel<<<dim3(T, B), dim3(192)>>>(
+            token_ids, position_ids, token_embeddings, position_embeddings, gamma, beta, 
+            output, B, T, V, P, D, eps);
+        return;
+    }
+    
     dim3 block(256);
     dim3 grid(T, B);
     token_embedding_layer_kernel<<<grid, block>>>(
         token_ids, position_ids, token_embeddings, position_embeddings, gamma, beta,
         output, B, T, V, P, D, eps);
-
 }
 
 

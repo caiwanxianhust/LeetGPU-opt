@@ -81,9 +81,51 @@ static __global__ void layer_normalization_dp4_kernel(
 }
 
 
+/**
+ * @brief layer normalization for C = 512
+ * @param input [N, C]
+ * @param weight [C]
+ * @param bias [C]
+ * @param output [N, C]
+ */
+static __global__ void layer_normalization_D512_kernel(
+    const float* __restrict__ input, 
+    const float* __restrict__ weight, 
+    const float* __restrict__ bias, 
+    float* __restrict__ output,
+    int N, int C, float eps) 
+{
+    // load input from global memory to registers
+    float4 val = reinterpret_cast<const float4*>(input + blockIdx.x * C)[threadIdx.x];
+    float4 weight4 = reinterpret_cast<const float4*>(weight)[threadIdx.x];
+    float4 bias4 = reinterpret_cast<const float4*>(bias)[threadIdx.x];
+
+    float mean = val.x + val.y + val.z + val.w;
+    float square_sum = (val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w);
+    __syncthreads();
+
+    // reduce mean and square_sum
+    mean = block_all_reduce_sum(mean) / (float)C;
+    square_sum = block_all_reduce_sum(square_sum) / (float)C;
+    float inv_std = rsqrtf(square_sum - mean * mean + eps);
+
+    // normalize and write back to global memory
+    val.x = (val.x - mean) * inv_std * weight4.x + bias4.x;
+    val.y = (val.y - mean) * inv_std * weight4.y + bias4.y;
+    val.z = (val.z - mean) * inv_std * weight4.z + bias4.z;
+    val.w = (val.w - mean) * inv_std * weight4.w + bias4.w;
+    reinterpret_cast<float4*>(output + blockIdx.x * C)[threadIdx.x] = val;
+}
+
+
+
 static void launch_layer_normalization_kernel(const float* input, const float* weight, const float* bias, float* output,
     int N, int C, float eps) 
 {
+    if (C == 512) {
+        layer_normalization_D512_kernel<<<N, 128>>>(input, weight, bias, output, N, C, eps);
+        return;
+    }
     constexpr int block_size = 128;
     int grid_size = div_up(N, block_size >> 5);
     if (C & 3 == 0) {

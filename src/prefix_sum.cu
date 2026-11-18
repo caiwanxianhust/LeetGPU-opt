@@ -61,13 +61,93 @@ __global__ void add_reduce_sum_kernel(float* output, float* reduce_sum_output, i
 }
 
 
-void prefix_sum_cuda(float* input, float* output, float* reduce_sum_output, int N) {
+void prefix_sum_naive_cuda(float* input, float* output, float* reduce_sum_output, int N) {
     int block_size = 1024;
     int grid_size = (N + block_size - 1) / block_size;
     prefix_sum_in_block_kernel<<<grid_size, block_size>>>(input, output, reduce_sum_output, N);
     add_reduce_sum_kernel<<<grid_size, block_size>>>(output, reduce_sum_output, N);
     CHECK_CUDA_ERROR(cudaDeviceSynchronize());
 }
+
+
+static __device__ float warp_inclusive_scan(float val) {
+    int lane_id = threadIdx.x % 32;
+    for (int offset = 1; offset < 32; offset *= 2) {
+        float tmp = __shfl_up_sync(0xffffffff, val, offset);
+        if (lane_id >= offset) val += tmp;
+    }
+    return val;
+}
+
+static __device__ float block_inclusive_scan(float val) {
+    __shared__ float shared[32];
+    int lane = threadIdx.x % 32;
+    int warp_id = threadIdx.x / 32;
+
+    val = warp_inclusive_scan(val);
+    if (lane == 31) shared[warp_id] = val;
+    __syncthreads();
+
+    if (warp_id == 0) {
+        float warp_sum = (lane < (blockDim.x >> 5)) ? shared[lane] : 0.0f;
+        warp_sum = warp_inclusive_scan(warp_sum);
+        if (lane < (blockDim.x >> 5)) shared[lane] = warp_sum;
+    }
+    __syncthreads();
+
+    if (warp_id > 0) val += shared[warp_id - 1];
+    return val;
+}
+
+
+static __global__ void inclusive_scan_in_block_kernel(const float* input, float* output, float* reduce_sum_output, int N) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    float val = (tid < N) ? input[tid] : 0.0f;
+    val = block_inclusive_scan(val);
+    if (tid < N) output[tid] = val;
+    if (threadIdx.x == blockDim.x - 1 && tid < N) {
+        reduce_sum_output[blockIdx.x] = val;
+    }
+}
+
+
+static __global__ void addbase_block_kernel(float* output, float* reduce_sum_output, int N) {
+    int global_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (global_index < N && blockIdx.x > 0) {
+        output[global_index] += reduce_sum_output[blockIdx.x - 1];
+    }
+}
+
+
+void inclusive_scan_recursive(const float* input, float* output, int count, float* scratch) {
+    constexpr int THREADS_PER_BLOCK = 1024;
+    int block_count = (count + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    float* block_totals = scratch;
+
+    inclusive_scan_in_block_kernel<<<block_count, THREADS_PER_BLOCK>>>(input, output, block_totals, count);
+
+    if (block_count > 1) {
+        inclusive_scan_recursive(block_totals, block_totals, block_count,
+                                 block_totals + block_count);
+        addbase_block_kernel<<<block_count, THREADS_PER_BLOCK>>>(output, block_totals,
+                                                                            count);
+    }
+}
+
+
+
+void prefix_sum_cuda(float* input, float* output, int N) {
+    float* scratch = nullptr;
+    cudaMalloc(&scratch, N * sizeof(float));
+
+    inclusive_scan_recursive(input, output, N, scratch);
+    cudaDeviceSynchronize();
+
+    cudaFree(scratch);
+}
+
+
+
 
 
 torch::Tensor prefix_sum(
@@ -78,11 +158,9 @@ torch::Tensor prefix_sum(
     TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be of type float32");
     int N = input.size(0);
     torch::Tensor output = torch::empty({N}, input.options());
-    torch::Tensor reduce_sum_output = torch::empty({N}, input.options());
     prefix_sum_cuda(
         input.data_ptr<float>(),
         output.data_ptr<float>(),
-        reduce_sum_output.data_ptr<float>(),
         N
     );
     return output;

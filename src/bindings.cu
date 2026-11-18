@@ -417,6 +417,71 @@ torch::Tensor layer_normalization(
 );
 
 
+torch::Tensor gelu(
+    const torch::Tensor& X
+);
+
+
+torch::Tensor distillation_kl_divergence(
+    const torch::Tensor& teacher_logits, const torch::Tensor& student_logits, float temperature
+); 
+
+torch::Tensor integral_image(const torch::Tensor& input);
+
+torch::Tensor grouped_gemm(
+    const torch::Tensor& A, 
+    const torch::Tensor& B, 
+    const torch::Tensor& group_offsets
+); 
+
+std::tuple<torch::Tensor, torch::Tensor> rms_norm_backward(
+    const torch::Tensor& x, 
+    const torch::Tensor& weight, 
+    const torch::Tensor& dy, 
+    float eps
+);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> layer_norm_backward(
+    const torch::Tensor& x, 
+    const torch::Tensor& gamma, 
+    const torch::Tensor& mean, 
+    const torch::Tensor& rstd, 
+    const torch::Tensor& dy
+);
+
+
+torch::Tensor multi_lora_batched_linear(
+    const torch::Tensor &x, 
+    const torch::Tensor &W, 
+    const torch::Tensor &A, 
+    const torch::Tensor &B,
+    const torch::Tensor &adapter_ids, 
+    float scale
+); 
+
+
+void fused_adamw(
+    torch::Tensor params,
+    torch::Tensor grad,
+    torch::Tensor m,
+    torch::Tensor v,
+    float lr,
+    float beta1,
+    float beta2,
+    float eps,
+    float weight_decay,
+    int t
+); 
+
+
+torch::Tensor fused_ln_linear_gelu(
+    const torch::Tensor &x, 
+    const torch::Tensor &gamma, 
+    const torch::Tensor &beta,
+    const torch::Tensor &W, 
+    const torch::Tensor &bias, 
+    float eps
+); 
 
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -503,4 +568,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("adder_transformer_inference", &adder_transformer_inference, "Adder Transformer Inference (CUDA)");
     m.def("multi_head_cross_attention", &multi_head_cross_attention, "Multi-Head Cross Attention (CUDA)");
     m.def("layer_normalization", &layer_normalization, "Layer Normalization (CUDA)");
+    m.def("gelu", &gelu, "GELU (CUDA)");
+    m.def("distillation_kl_divergence", &distillation_kl_divergence, "Distillation KL Divergence (CUDA)");
+    m.def("integral_image", &integral_image, "Integral Image (CUDA)");
+    m.def("grouped_gemm", &grouped_gemm, "Grouped GEMM (CUDA)");
+    m.def("rms_norm_backward", &rms_norm_backward, "RMS Norm Backward (CUDA)");
+    m.def("layer_norm_backward", &layer_norm_backward, "Layer Norm Backward (CUDA)");
+    m.def("multi_lora_batched_linear", &multi_lora_batched_linear, "Multi LoRA Batched Linear (CUDA)");
+    m.def("fused_adamw", &fused_adamw, "Fused AdamW Optimizer (CUDA)");
+    m.def("fused_ln_linear_gelu", &fused_ln_linear_gelu, "Fused LayerNorm + Linear + GELU (CUDA)");
 }
