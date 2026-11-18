@@ -2,7 +2,8 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 import os
 import glob
-os.environ['MAX_JOBS'] = '1'  # 限制为单进程编译
+# 默认单进程编译（省内存）；本地想加速可 `MAX_JOBS=4 python3 setup.py build_ext --inplace`
+os.environ.setdefault('MAX_JOBS', '1')
 
 setup(
     name="leetgpu",
