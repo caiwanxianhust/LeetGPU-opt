@@ -7,8 +7,8 @@ wall time into GFLOP/s or GB/s. test.py is intentionally NOT involved.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Callable
 
 import torch
 
@@ -26,7 +26,6 @@ class Spec:
     shape: Callable[[Inputs], str] | None = None
     flops: Callable[[Inputs], float] | None = None
     nbytes: Callable[[Inputs], float] | None = None
-    variants: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     notes: str = ""
 
     def __post_init__(self) -> None:
