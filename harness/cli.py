@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import json
 import subprocess
 import sys
@@ -207,6 +208,13 @@ def cmd_check(args) -> int:
     # copies so neither side can disturb the other.
     ref_args = tuple(copy.deepcopy(a) for a in inputs[0])
     expected = spec.reference(*ref_args, **inputs[1])
+    # Release the reference's copies and cached blocks before the kernel runs:
+    # the largest specs (rms_norm_backward: 3 GiB of inputs) otherwise sit within
+    # a few hundred MiB of the 8 GiB card and intermittently die with
+    # "CUDA error: out of memory" while the comparison allocates its temporaries.
+    del ref_args
+    gc.collect()
+    torch.cuda.empty_cache()
     out = call()
     torch.cuda.synchronize()
 
