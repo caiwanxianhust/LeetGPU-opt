@@ -86,10 +86,22 @@ fi
 
 # ---------------------------------------------------------------- B2 correctness
 if python3 -m harness check "$NAME" >"$TMP/check.log" 2>&1; then
-    grep -E '^(PASS|FAIL)' "$TMP/check.log" || true
+    grep -E '^(PASS|FAIL|SKIP)' "$TMP/check.log" || true
     ok "B2 correctness (harness check)"
 else
-    bad "B2 correctness"
+    KNOWN="$(python3 - "$NAME" <<'PY' 2>/dev/null
+import sys
+sys.path.insert(0, "tools")
+from verify_specs import KNOWN_FAIL
+print(KNOWN_FAIL.get(sys.argv[1], ""))
+PY
+)"
+    if [ -n "$KNOWN" ]; then
+        bad "B2 correctness (KNOWN kernel defect, recorded in tools/verify_specs.py)"
+        printf '  %s\n' "$KNOWN" >&2
+    else
+        bad "B2 correctness"
+    fi
     tail -5 "$TMP/check.log" >&2
 fi
 
@@ -170,7 +182,7 @@ if [ -z "$STATUS" ]; then
 else
     UNEXPECTED="$(printf '%s\n' "$STATUS" | sed -e 's/^[ MARCUD?!][ MARCUD?!] //' | while read -r p; do
         case "$p" in
-            "src/$NAME.cu"|src/bindings.cu|src/cuda_kernels.cuh|src/utils.cuh|test.py|bench.py|BENCH.md|BENCH.json|AGENTS.md|setup.py|.gitignore|tools/*|harness/*|"harness/__pycache__/"*) ;;
+            "src/$NAME.cu"|src/bindings.cu|src/cuda_kernels.cuh|src/utils.cuh|bench.py|BENCH.md|BENCH.json|AGENTS.md|README.md|setup.py|.gitignore|tools/*|harness/*|"harness/__pycache__/"*|"tools/__pycache__/"*) ;;
             *) printf '%s\n' "$p" ;;
         esac
     done)"

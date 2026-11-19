@@ -1,4 +1,9 @@
-"""Spec registry: name -> Spec, with legacy test.py-name aliasing."""
+"""Spec registry: name -> Spec, with legacy test.py-name aliasing.
+
+Specs live in three modules and all three register themselves on import:
+`kernels` (hand-written, with cost models), `specs_legacy` (generated from the
+retired test.py) and `specs_manual` (hand-written where the generator refused).
+"""
 
 from __future__ import annotations
 
@@ -17,7 +22,9 @@ def register(spec: Spec) -> Spec:
 
 def load_all() -> dict[str, Spec]:
     if not _SPECS:
-        from . import kernels  # noqa: F401  (import side effect registers specs)
+        # import side effects register the specs; order is irrelevant because a
+        # duplicate name raises in register().
+        from . import kernels, specs_legacy, specs_manual  # noqa: F401
     return _SPECS
 
 

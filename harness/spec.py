@@ -2,7 +2,8 @@
 
 A Spec is the single source of truth for one kernel: how to build its inputs,
 its torch reference, its tolerance, and the optional cost model used to turn
-wall time into GFLOP/s or GB/s. test.py is intentionally NOT involved.
+wall time into GFLOP/s or GB/s. The retired test.py is not involved: the Spec
+is the only place a kernel's inputs, tolerance and expected output are defined.
 """
 
 from __future__ import annotations
@@ -27,6 +28,15 @@ class Spec:
     flops: Callable[[Inputs], float] | None = None
     nbytes: Callable[[Inputs], float] | None = None
     notes: str = ""
+    # Kernels that mutate their arguments instead of returning a tensor
+    # (reverse_array, sorting, color_invert, fused AdamW ...).  The indices are
+    # positions in the positional argument tuple produced by make_inputs; after
+    # the call those arguments are compared, in ascending order, against the
+    # reference's return value.  Anything the kernel returns is ignored.
+    inplace_indices: tuple[int, ...] = ()
+    # Legacy tests sometimes reshaped the kernel output before comparing
+    # (out = out.view(N, N)).  Applied to the candidate side only.
+    postprocess: Callable[[Any], Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.name.isidentifier():
@@ -36,6 +46,10 @@ class Spec:
         atol, rtol = self.tol
         if atol < 0 or rtol < 0:
             raise ValueError(f"{self.name}: tolerance must be non-negative")
+        if not isinstance(self.inplace_indices, tuple) or any(
+                not isinstance(i, int) or i < 0 for i in self.inplace_indices):
+            raise ValueError(f"{self.name}: inplace_indices must be a tuple of "
+                             f"non-negative ints, got {self.inplace_indices!r}")
 
     @property
     def dtype_str(self) -> str:

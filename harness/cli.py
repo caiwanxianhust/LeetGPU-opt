@@ -14,13 +14,14 @@ all diagnostics go to stderr.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import subprocess
 import sys
 
 import torch
 
-from . import judge, measure, registry, report, store
+from . import checker, judge, measure, registry, report, store
 
 SEED = 0
 WARMUP = 5
@@ -194,29 +195,35 @@ def cmd_check(args) -> int:
     if not _require_cuda():
         return 3
     if spec.reference is None:
-        print(f"{canonical}: no reference registered, nothing to check", file=sys.stderr)
-        return 2
+        # Benchmark-only spec: there is a kernel but no trustworthy reference
+        # (see README "kernels without a Spec").  SKIP is not a failure.
+        print(f"SKIP {canonical}: no reference registered (benchmark-only spec)",
+              file=sys.stderr)
+        return 0
 
     call, inputs = _prepare(spec)
+    # The reference must see the inputs as they were *before* the kernel ran:
+    # in-place kernels overwrite their arguments.  Give the reference its own
+    # copies so neither side can disturb the other.
+    ref_args = tuple(copy.deepcopy(a) for a in inputs[0])
+    expected = spec.reference(*ref_args, **inputs[1])
     out = call()
     torch.cuda.synchronize()
-    expected = spec.reference(*inputs[0], **inputs[1])
 
-    if not torch.is_tensor(out):
-        print(f"FAIL {canonical}: kernel did not return a tensor", file=sys.stderr)
-        return 1
-    if out.shape != expected.shape:
-        print(f"FAIL {canonical}: shape {tuple(out.shape)} != reference "
-              f"{tuple(expected.shape)}", file=sys.stderr)
-        return 1
+    if spec.inplace_indices:
+        # The kernel mutates arguments; compare the mutated arguments, not the
+        # return value (which legacy tests usually ignored or returned as None).
+        candidate = tuple(inputs[0][i] for i in spec.inplace_indices)
+    else:
+        candidate = out
 
     atol, rtol = spec.tol
-    max_diff = (out - expected).abs().max().item()
-    if not bool(torch.allclose(out, expected, atol=atol, rtol=rtol)):
-        print(f"FAIL {canonical}: max|diff|={max_diff:.6g} exceeds atol={atol} rtol={rtol}",
+    result = checker.compare_outputs(candidate, expected, spec.tol, spec.postprocess)
+    if not result.ok:
+        print(f"FAIL {canonical}: {result.detail()} (atol={atol} rtol={rtol})",
               file=sys.stderr)
         return 1
-    print(f"PASS {canonical}: max|diff|={max_diff:.6g} within atol={atol} rtol={rtol}",
+    print(f"PASS {canonical}: {result.detail()} within atol={atol} rtol={rtol}",
           file=sys.stderr)
     return 0
 
@@ -285,8 +292,45 @@ def cmd_selftest(args) -> int:
         good = verdict.accept == expected
         failures += 0 if good else 1
         print(f"{'ok  ' if good else 'FAIL'} {label}: {verdict.line()}")
+    failures += _check_selftest()
     print(f"selftest: {'PASS' if not failures else f'{failures} failed'}")
     return 0 if not failures else 1
+
+
+def _check_selftest() -> int:
+    """Unit-test the comparison semantics of `harness check` (no GPU needed)."""
+    base = (torch.arange(6, dtype=torch.float32).reshape(2, 3) / 7.0)
+    ints = torch.tensor([[1, 2], [3, 4]], dtype=torch.int32)
+    nan = torch.tensor([float("nan"), 1.0])
+
+    def cmp(cand, exp, tol=(1e-3, 1e-3), pp=None):
+        return checker.compare_outputs(cand, exp, tol, pp)
+
+    cases = [
+        ("float inside tolerance accepted", True, cmp(base, base + 1e-5)),
+        ("float outside tolerance rejected", False, cmp(base, base + 1e-2)),
+        ("tuple of two outputs accepted", True, cmp((base, ints), (base, ints))),
+        ("tuple arity mismatch rejected", False, cmp((base,), (base, ints))),
+        ("integer output compares exactly", True, cmp(ints, ints.clone())),
+        ("integer off-by-one rejected", False,
+         cmp(ints, torch.tensor([[1, 2], [3, 5]], dtype=torch.int32))),
+        ("shape mismatch rejected", False, cmp(base.reshape(3, 2), base)),
+        ("0-dim vs 1-element accepted", True,
+         cmp(torch.tensor([3.0]), torch.tensor(3.0))),
+        ("1-element vs 2-element rejected", False,
+         cmp(torch.tensor([3.0]), torch.tensor([3.0, 4.0]))),
+        ("dtype mismatch rejected", False, cmp(base, base.to(torch.float16))),
+        ("postprocess is applied to the candidate only", True,
+         cmp(base.reshape(6), base, pp=lambda t: t.view(2, 3))),
+        ("NaN is not silently equal", False, cmp(nan, torch.tensor([0.0, 1.0]))),
+    ]
+    failures = 0
+    for label, expected, result in cases:
+        good = result.ok == expected
+        failures += 0 if good else 1
+        print(f"{'ok  ' if good else 'FAIL'} {label}: {result.detail()}")
+    print(f"check-selftest: {'PASS' if not failures else f'{failures} failed'}")
+    return failures
 
 
 def _build_parser() -> argparse.ArgumentParser:

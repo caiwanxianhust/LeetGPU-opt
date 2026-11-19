@@ -1,26 +1,29 @@
 # AGENTS.md
 
-本文件给在此仓库工作的 agent / 人看的约定。命令与路径均基于仓库内实际文件（`setup.py`、`test.py`、`profile/*.py`、`.gitignore`）核对过，不要凭记忆改动。
+本文件给在此仓库工作的 agent / 人看的约定。命令与路径均基于仓库内实际文件（`setup.py`、`harness/`、`tools/`、`.gitignore`）核对过，不要凭记忆改动。
 
 ## 项目是什么
 
-单卡 CUDA kernel 练习/优化仓库（LeetGPU 题目集）。每个 kernel 一个 `src/*.cu` 文件，统一由 `src/bindings.cu` 的 `PYBIND11_MODULE` 通过 `m.def(...)` 暴露为 Python 扩展 `leetgpu`；`test.py` 用 PyTorch 参考实现做正确性对比并打印耗时；`profile/` 下用 Nsight Compute 对单 kernel 做性能剖析。
+单卡 CUDA kernel 练习/优化仓库（LeetGPU 题目集）。每个 kernel 一个 `src/*.cu` 文件，统一由 `src/bindings.cu` 的 `PYBIND11_MODULE` 通过 `m.def(...)` 暴露为 Python 扩展 `leetgpu`。每个 kernel 在 `harness/` 里有一个 `Spec`（输入、torch 参考、容差、成本模型），`python3 -m harness check <name>` 是**唯一**的正确性判据，`harness run` 测时，剖析走 `harness run --ncu`。`test.py` 与 `profile/` 已退休（2026-11，见 README §7），旧的正确性测试全部迁移成 Spec。
 
 ## 目录约定
 
 ```
 README.md       # 教程：目录与文件逐个说明、数据流、常见任务
 setup.py        # 唯一构建入口（内存感知 MAX_JOBS + CUDAExtension）
-test.py         # 【legacy】存量 kernel 的正确性测试（非 pytest）
-harness/        # 评估框架：spec / registry / measure / judge / store / report / cli
+harness/        # 评估框架：spec / registry / checker / measure / judge / store / report / cli
   kernels.py    #   ← 新 kernel 的输入规格、参考实现、容差、成本模型都写这里
+  specs_legacy.py  # ← 90 个存量 kernel 里生成器能翻译的 78 个 Spec（勿手改）
+  specs_manual.py  # ← 生成器翻译不了的 11 个存量 Spec，手写
+  checker.py    #   ← `harness check` 的比较语义（浮点 allclose / 整型精确）
 bench.py        # 兼容壳：转发到 python3 -m harness run
 BENCH.json      # 机器可读测量历史（含 so_sha256、commit、GPU 指纹）
 BENCH.md        # 人读账本；表格由 harness report 生成，散文手写
 tools/gate.sh   # 门禁：B1 build → B2 check → B3 run+compare → B4 卫生 → B5 记账
+tools/verify_specs.py  # 全量验收：coverage + 每个 Spec 的 check + --spot 扰动自检
+tools/cross_check.py   # 一次性对账：Spec 判定 vs 旧 test.py 判定（需从 git 历史取回 test.py）
 src/            # 97 个 *.cu（一个题目一个文件）+ cuda_kernels.cuh + utils.cuh
 src/bindings.cu # 顶部集中声明全部签名 + PYBIND11_MODULE 里 92 个 m.def 注册点
-profile/        # 【legacy】4 个 ncu 剖析脚本；新 kernel 用 harness run --ncu 代替
 build/          # setuptools 中间产物（已 gitignore）
 leetgpu.cpython-310-x86_64-linux-gnu.so  # 就地构建的扩展（已 gitignore）
 ```
@@ -55,28 +58,26 @@ python3 setup.py build_ext --inplace
   显式 `MAX_JOBS=N` 优先；`LEETGPU_MEM_PER_JOB_MB` / `LEETGPU_MEM_RESERVE_MB` 可调。
 - `setup.py` 里用 `glob.glob("src/*.cu")` 全量编译；全量重建 ≈ 97 × 65 s / 2 ≈ 50 min，增量构建是常态。
 - 固定 `-arch=sm_89 -std=c++17`。换 GPU 架构需改 `setup.py`。
-- `--inplace` 把 `leetgpu*.so` 放到仓库根，`test.py` 才能直接 `import leetgpu`。
+- `--inplace` 把 `leetgpu*.so` 放到仓库根，`import leetgpu` 才能找到它（cwd 在 `sys.path[0]`）。
 
 ## 测试
 
-没有 pytest，也没有 `test_*.py` 收集机制。**首选按模块导入调用，不要改 `test.py`**：
+没有 pytest。**唯一入口是 `harness check`**，判据是 `Spec`（输入 + torch 参考 + 容差）：
 
 ```bash
 cd /home/houlai/resumeProject/hpc/leetgpu
-python3 -c 'import test; test.<name>()'
-# 例：
-python3 -c 'import test; test.fused_layernorm_linear_gelu()'
+python3 -m harness check <name>          # 单个：PASS/FAIL/SKIP + max|diff|
+python3 -m harness selftest              # 比较/判定语义自测，不需要 GPU
+python3 tools/verify_specs.py --spot 10  # 全量：coverage + 90 个 check + 10 个扰动自检
+python3 tools/cross_check.py --rounds 5  # 一次性对账（需先从 git 历史取回 test.py）
 ```
 
-**已验证可用（勿再怀疑）**：`import test` 无副作用——AST 检查显示模块级只有 5 个 `import`、1 个 `ImportFrom`、93 个 `FunctionDef`、1 个 `ClassDef`，唯一的可执行块是第 4293 行的 `if __name__ == "__main__"`，导入时不会触发。实测 `python3 -c 'import test; test.fused_layernorm_linear_gelu()'` 正常跑通并打印 `All tests passed!`（本机 RTX 4060 Laptop，kernel 27.18 ms / PyTorch 334.67 ms）。因为 `python3 -c` 会把 cwd 放到 `sys.path[0]`，仓库根的 `leetgpu*.so` 可直接被 `test.py` 导入，无需 `PYTHONPATH`。
-
-**仅当上述形式不可行时**（例如需要临时加打印、或要顺序跑多个函数），才改 `test.py`：把 `if __name__ == "__main__"`（第 4293 行起）里目标函数那行取消注释、其余保持注释，然后 `python3 test.py`。当前该块里只有第 4383 行的 `fused_layernorm_linear_gelu()` 是激活的。改这一块属于临时调试，提交前请还原，并在回复中说明改了哪一行。
-
 判读方式（**门禁必须机器可判**）：
-- 新增 kernel 一律写 `assert compare_tensors(...)`，失败即 AssertionError → 非零退出。
-- 存量测试有两派：早期 28 处 `assert torch.allclose(...)`（全文件共 31 条 assert）可靠；后期 71 处裸
-  `compare_tensors(...)` 调用丢弃返回值，**比较失败也 exit 0**，只能靠输出里的 `mismatch` / `Maximum difference`
-  关键字识别。`tools/gate.sh` 的 B2 走 `harness check`，不要只看退出码。
+- `harness check` 退出码 0 = 通过；非 0 = 失败，并在末行给出 `max|diff|` / 形状或 dtype 差异。
+- 比较语义写在 `harness/checker.py`：浮点用 `torch.allclose(atol, rtol)`；整型/uint/bool **精确相等**；
+  dtype 必须一致（整型之间放宽到 int64 比较）；shape 必须一致（0-dim 与 1 元素视为同一标量）。
+- **禁止为凑通过放宽 `Spec.tol`**。容差是从旧测试原样搬过来的；要改就得说清依据。
+- 没有 reference 的 Spec（`adder_transformer_inference`、`ssm_selective_scan`）会打印 `SKIP`，不算失败。
 - 测试默认要求 GPU 可用，故同样受家规 4 约束。
 
 ## 跑分 / 剖析
@@ -93,7 +94,7 @@ python3 -m harness selftest                           # 判定逻辑单测，不
 ```
 
 新 kernel 的**输入规格、torch 参考、容差、成本模型**全部写在 `harness/kernels.py` 的 `Spec` 里；
-形状只写一处，不再和 `test.py` 双写。
+存量 90 个 Spec 在 `harness/specs_legacy.py`（生成，勿手改）与 `harness/specs_manual.py`（手写）。
 
 剖析用 ncu 包 `harness run --ncu`（warmup 5 次后只跑 1 次；`-s 5 -c 1` 只采最后一次 launch）：
 
@@ -102,10 +103,8 @@ sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 -m harness run <name
 # kernel 内部若 launch 多个 kernel（如 twopass 实现），把 -c 调大
 ```
 
-`profile/*.py` 是 **legacy**（只覆盖 matmul / lora_linear / attention_with_linear_bias / linear_recurrence
-这 4 个），新 kernel 不要再加剖析脚本。
-
-`test.py` 里的耗时是单次 `time.time()` 墙钟，噪声大；**判定只认 `harness` + `tools/gate.sh`**。
+旧 `profile/*.py` 与 `test.py` 已删除（2026-11）；剖析统一用上面这条 `harness run --ncu`，
+它和记账用的是**同一份形状**，ncu 指标与 BENCH 数字因此可以直接对照。**判定只认 `harness` + `tools/gate.sh`**。
 
 ## 家规
 
@@ -113,7 +112,7 @@ sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 -m harness run <name
 2. **临时脚本与日志写 `/tmp`。** 不要在仓库里留 `tmp_*.py`、`*.log`、调试打印文件等一次性产物。
 3. **提交前运行 `git status --porcelain` 确认没有多余的未跟踪文件。** 期望输出为空，或只剩本次有意提交的文件；出现意料外的未跟踪文件先清理再提交。
 4. **构建 / 测试 / 跑分必须在 Full access 权限下进行。** workspace-write 沙箱下 `torch.cuda.is_available()` 返回 `False` 并报 `CUDA error 304: OS call failed or operation not supported on this OS`（沙箱挡住了 `/dev/dxg` 的设备 ioctl），而 `nvidia-smi` 一切正常。实测同一命令提到 Full access 后立刻变成 `cuda_avail = True`、设备名正常、kernel 跑通。看到 304 先提权重试，不要改代码、不要当成 GPU 或驱动故障。
-5. **性能结论必须是同形状、同精度、同 GPU 的前后对比。** shape / dtype / 设备任一不同就不允许下"更快/更慢"的结论；要写明对比依据（ncu 指标，或多次计时的中位数），`test.py` 的单次墙钟只能用于粗筛。
+5. **性能结论必须是同形状、同精度、同 GPU 的前后对比。** shape / dtype / 设备任一不同就不允许下"更快/更慢"的结论；要写明对比依据（ncu 指标，或多次计时的中位数），单次墙钟只能用于粗筛。
 
 
 ## 工作流 A：新增 kernel
@@ -127,7 +126,6 @@ sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 -m harness run <name
 2. 先在 `harness/kernels.py` 写 `Spec`：`make_inputs(seed)` 固定 seed 造输入、
    `reference` 是 torch 参考、`tol` 是容差、`shape`/`flops`/`nbytes` 供报告。
    正确性由 `python3 -m harness check <name>` 机器判定（allclose）。
-   若还想兼容 legacy `test.py`，再补一个同名测试函数并用 `assert compare_tensors(...)`——
    **不要为凑通过放宽 atol/rtol**。
 3. 写 naive 实现 `src/<name>.cu`；然后在 `bindings.cu` 里改**两处**：
    ① 顶部声明区加一行 `torch::Tensor <name>(...);`（否则 `m.def` 引用不到，B1 直接编译失败）；
