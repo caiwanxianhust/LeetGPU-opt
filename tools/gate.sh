@@ -71,6 +71,14 @@ fi
 NAME="$CANON"
 note "# kernel=$NAME procs=$PROCS"
 
+# A handful of Specs are named after the legacy test.py function rather than the
+# source file (softmax_1D lives in src/softmax.cu). B4 whitelists the source that
+# the kernel actually lives in; add entries here when a name differs.
+SRC="$NAME"
+case "$NAME" in
+    softmax_1D) SRC="softmax" ;;
+esac
+
 # ---------------------------------------------------------------- B1 build
 if [ "$DO_BUILD" -eq 1 ]; then
     if python3 setup.py build_ext --inplace >"$TMP/build.log" 2>&1; then
@@ -182,7 +190,7 @@ if [ -z "$STATUS" ]; then
 else
     UNEXPECTED="$(printf '%s\n' "$STATUS" | sed -e 's/^[ MARCUD?!][ MARCUD?!] //' | while read -r p; do
         case "$p" in
-            "src/$NAME.cu"|src/bindings.cu|src/cuda_kernels.cuh|src/utils.cuh|bench.py|BENCH.md|BENCH.json|AGENTS.md|README.md|setup.py|.gitignore|tools/*|harness/*|"harness/__pycache__/"*|"tools/__pycache__/"*) ;;
+            "src/$SRC.cu"|src/bindings.cu|src/cuda_kernels.cuh|src/utils.cuh|bench.py|BENCH.md|BENCH.json|AGENTS.md|README.md|setup.py|.gitignore|tools/*|harness/*|"harness/__pycache__/"*|"tools/__pycache__/"*) ;;
             *) printf '%s\n' "$p" ;;
         esac
     done)"

@@ -22,7 +22,12 @@ __global__ void softmax_in_block(const float* input, MD_F* md, int N) {
 }
 
 __global__ void reduce_mdf(MD_F* md, int length) { 
+    // Identity of MDF_Op: with m = -inf the weighted terms of this lane
+    // vanish, so the reduction starts from an empty accumulator instead of
+    // reading uninitialised registers (MD_F has no default constructor).
     MD_F tmp;
+    tmp.m = -1e20f;
+    tmp.d = 0.0f;
     for (int i = threadIdx.x; i < length; i += blockDim.x) {
         tmp = MDF_Op()(tmp, md[i]);
     }
