@@ -63,10 +63,10 @@ leetgpu/
 
 | 文件 | 行数 | 作用 |
 |---|---|---|
-| [setup.py](setup.py) | 153 | **唯一构建入口**。`_adaptive_jobs()` 读 `/proc/meminfo` 决定并发数；`glob.glob("src/*.cu")` 全量编译；硬编码 CUTLASS include、`-arch=sm_89 -std=c++17`；产物 `--inplace` 落到仓库根。改 GPU 架构只能改这里。 |
+| [setup.py](setup.py) | 154 | **唯一构建入口**。`_adaptive_jobs()` 读 `/proc/meminfo` 决定并发数；`glob.glob("src/*.cu")` 全量编译；硬编码 CUTLASS include、`-arch=sm_89 -std=c++17`；产物 `--inplace` 落到仓库根。改 GPU 架构只能改这里。 |
 | [bench.py](bench.py) | 14 | 兼容壳。`python3 bench.py <k> [flags]` 等价于 `python3 -m harness run <k> [flags]`，保留旧习惯与旧脚本。 |
-| [AGENTS.md](AGENTS.md) | 184 | 给 agent 的契约：工作流 A（新增）/ B（优化）、门表 B0–B5、5 条家规。**动手前必读**。 |
-| [BENCH.md](BENCH.md) | 49 | 人读账本。分四段：协议、生成表格（标记区间内自动覆盖）、历史存档（旧口径，不参与判定）、噪声带结论。 |
+| [AGENTS.md](AGENTS.md) | 185 | 给 agent 的契约：工作流 A（新增）/ B（优化）、门表 B0–B5、5 条家规。**动手前必读**。 |
+| [BENCH.md](BENCH.md) | 51 | 人读账本。分四段：协议、生成表格（标记区间内自动覆盖）、历史存档（旧口径，不参与判定）、噪声带结论。 |
 | [BENCH.json](BENCH.json) | — | 机器可读历史，每条含 `so_sha256`、git commit/dirty、GPU、torch/cuda 版本、每进程统计、聚合值、torch 参考。目前 2 条。 |
 | [.gitignore](.gitignore) | 6 | 忽略 `build/`、`*.ncu-rep`、根目录 `.so`、`__pycache__/`、`*.py[cod]`。**新增产物类型必须同步补这里**（家规 1）。 |
 | `.vscode/` | — | 仅把 `*.cu`/`*.cuh` 关联成 C++，便于跳转，无构建作用。 |
@@ -77,28 +77,28 @@ leetgpu/
 
 | 文件 | 行数 | 作用 |
 |---|---|---|
-| [harness/__init__.py](harness/__init__.py) | 14 | 包说明与模块清单。 |
+| [harness/__init__.py](harness/__init__.py) | 18 | 包说明与模块清单。 |
 | [harness/__main__.py](harness/__main__.py) | 5 | 让 `python3 -m harness` 可用，转调 `cli.main()`。 |
 | [harness/spec.py](harness/spec.py) | 63 | **数据契约**。`Spec` 冻结 dataclass：`name`（必须等于 pybind 名）、`test_fn`（旧测试函数名，仅用于对账）、`dtype`、`make_inputs(seed)`、`reference`、`tol`、`shape`、`flops`、`nbytes`，以及两个默认关闭的开关：`inplace_indices`（kernel 原地改哪些实参）、`postprocess`（只作用于 kernel 输出的 reshape）。构造时校验名字是合法标识符、容差非负、下标非负。 |
 | [harness/checker.py](harness/checker.py) | 134 | **比较语义**，纯函数、不碰 CUDA。`flatten()` 展开 tuple/list；`compare_outputs()` 逐叶子比较：浮点 `torch.allclose(atol, rtol)` 并报 `max|diff|`；整型/uint/bool 精确相等（dtype 标签不同但都非浮点时先并到 int64）；shape 必须一致（0-dim 与 1 元素视为同一标量）；`postprocess` 只作用于 candidate。 |
-| [harness/specs_legacy.py](harness/specs_legacy.py) | 3410 | **90 个存量 Spec 里的 78 个**，由 `tools/import_specs.py` 从旧 `test.py` 机械生成，**不要手改**——改生成器再重跑。 |
-| [harness/specs_manual.py](harness/specs_manual.py) | 427 | 生成器翻译不了的 11 个存量 Spec（`count_equal*`、`fused_adamw`、`logistic_regression`、`matrix_copy`、`moe_topk_gating`、`radix_sort`、`sorting`、`avg_categorical_cross_entropy_loss`、`color_invert`、`multi_agent_sim`），手写并注明理由。 |
+| [harness/specs_legacy.py](harness/specs_legacy.py) | 3443 | **90 个存量 Spec 里的 78 个**，由 `tools/import_specs.py` 从旧 `test.py` 机械生成，**不要手改**——改生成器再重跑。 |
+| [harness/specs_manual.py](harness/specs_manual.py) | 431 | 生成器翻译不了的 11 个存量 Spec（`count_equal*`、`fused_adamw`、`logistic_regression`、`matrix_copy`、`moe_topk_gating`、`radix_sort`、`sorting`、`avg_categorical_cross_entropy_loss`、`color_invert`、`multi_agent_sim`），手写并注明理由。 |
 | [harness/registry.py](harness/registry.py) | 42 | 注册表。`register()` 防重复；`resolve(name)` 同时接受 pybind 名和旧测试函数名（回退匹配 `spec.test_fn`）；首次访问时惰性 import `kernels` / `specs_legacy` / `specs_manual`。 |
 | [harness/kernels.py](harness/kernels.py) | 53 | **唯一写形状的地方**。目前只有 `fused_ln_linear_gelu`：4096³ fp32、`eps=1e-5`、torch 参考（LayerNorm→Linear→GELU）、`tol=(1e-3,1e-3)`、`flops=2MNK`、`nbytes=3·MNK·4`。新增 kernel 就是往这加一个 `Spec`。 |
-| [harness/measure.py](harness/measure.py) | 102 | 测量内核。`_event_time()` 用 CUDA Event 卡住单次调用（含 kernel 内部输出分配）；`measure()` 先 warmup 5 次，再按目标 200 ms 反推迭代数（夹在 20–200）；`summarize()` 出 n/median/trimmed_mean/min/max/P10/P90/MAD/CV；`aggregate()` 跨进程取 median-of-medians，并算 `spread_pct`。 |
+| [harness/measure.py](harness/measure.py) | 103 | 测量内核。`_event_time()` 用 CUDA Event 卡住单次调用（含 kernel 内部输出分配）；`measure()` 先 warmup 5 次，再按目标 200 ms 反推迭代数（夹在 20–200）；`summarize()` 出 n/median/trimmed_mean/min/max/P10/P90/MAD/CV；`aggregate()` 跨进程取 median-of-medians，并算 `spread_pct`。 |
 | [harness/judge.py](harness/judge.py) | 69 | 判定纯函数，无 GPU 也能测。`noise_se_pct()`：多进程用 `spread/√procs`，单进程退化为 `cv/√n`；`decide()` 判据见 §5。 |
 | [harness/store.py](harness/store.py) | 117 | 记录层。`fingerprint()` 抓 git commit/dirty、GPU 名/SM 数/最高 SM 时钟/driver、torch/cuda 版本、**`.so` 的 sha256 前 16 位**；`build_record()`/`append_record()`/`load_records()`/`last_record()`。 |
 | [harness/report.py](harness/report.py) | 59 | 渲染层。把记录渲染成 Markdown 表（`vs 上一版` 自动算差值，dirty 提交加 `*`），只替换 `BENCH:TABLE:START/END` 之间的内容，**绝不覆盖手写散文**。 |
-| [harness/cli.py](harness/cli.py) | 378 | 命令行与编排。6 个子命令；`run --procs N` 会真起 N 个**独立 OS 进程**（父进程再聚合，避免同进程暖机导致假稳定）；`--ref torch` 用同一套协议测参考实现；`--json -` 供父子进程通信；`check` 先 deepcopy 实参算参考、再在原始实参上调用（原地 kernel 才不会被污染），末尾 `selftest` 同时跑判定与比较两组单测。 |
+| [harness/cli.py](harness/cli.py) | 386 | 命令行与编排。6 个子命令；`run --procs N` 会真起 N 个**独立 OS 进程**（父进程再聚合，避免同进程暖机导致假稳定）；`--ref torch` 用同一套协议测参考实现；`--json -` 供父子进程通信；`check` 先 deepcopy 实参算参考、再在原始实参上调用（原地 kernel 才不会被污染）；参考算完后立刻 `del` 深拷贝并 `torch.cuda.empty_cache()` 再跑 kernel——`rms_norm_backward` 的 3 GiB 输入曾在 8 GB 卡上偶发 `CUDA error: out of memory`（修前 8 次连跑崩 2–5 次，修后 8/8 稳过）。末尾 `selftest` 同时跑判定与比较两组单测。 |
 
 ### 3.3 `tools/`
 
 | 文件 | 行数 | 作用 |
 |---|---|---|
-| [tools/import_specs.py](tools/import_specs.py) | 883 | 旧 `test.py` → `harness/specs_legacy.py` 的翻译器：解析每个测试函数的输入构造/参考/比较三段的依赖闭包，机械生成 `_make_*`/`_ref_*`；翻译不了（自比自、参考要看调用前的值、逐输出容差不同…）一律报 MANUAL 交给手写文件，**绝不发明参考实现**。 |
-| [tools/verify_specs.py](tools/verify_specs.py) | 215 | 全量验收：`bindings.cu` 的 92 个 `m.def` 对账 90 个 Spec（2 个 benchmark-only 报 SKIP）、逐个跑 `harness check`、`--spot N` 做扰动自检（把候选输出移动 4×(atol+rtol·|ref|) 后比较**必须失败**，否则 Spec 是空转的）。已知缺陷写在 `KNOWN_FAIL`（10 条，旧测试同样失败，报 XFAIL）。 |
+| [tools/import_specs.py](tools/import_specs.py) | 978 | 旧 `test.py` → `harness/specs_legacy.py` 的翻译器：解析每个测试函数的输入构造/参考/比较三段的依赖闭包，机械生成 `_make_*`/`_ref_*`；翻译不了（自比自、参考要看调用前的值、逐输出容差不同…）一律报 MANUAL 交给手写文件，**绝不发明参考实现**。 |
+| [tools/verify_specs.py](tools/verify_specs.py) | 210 | 全量验收：`bindings.cu` 的 92 个 `m.def` 对账 90 个 Spec（2 个 benchmark-only 报 SKIP）、逐个跑 `harness check`、`--spot N` 做扰动自检（把候选输出移动 4×(atol+rtol·|ref|) 后比较**必须失败**，否则 Spec 是空转的）。已知缺陷写在 `KNOWN_FAIL`（10 条，旧测试同样失败，报 XFAIL）。 |
 | [tools/cross_check.py](tools/cross_check.py) | 141 | 一次性对账：同一 kernel 分别用 Spec 和旧 `test.py` 判定，只关心 `SPEC_ONLY_FAIL`（旧测过、Spec 不过 = 翻译错了）；`KNOWN_FAIL` 里的 kernel 两边都随机翻脸，跳过不计。`test.py` 已删，要重跑得先 `git show 4c3b656:test.py > test.py`。 |
-| [tools/gate.sh](tools/gate.sh) | 194 | 门禁执行器。一条命令串行跑完 B0–B5，输出逐门 PASS/FAIL；**只在全部门通过时**才追加 `BENCH.json` 并刷新 `BENCH.md`；从不 commit/push。参数：`--processes N`（默认 3）、`--no-build`、`--baseline`、`--min-gain PCT`（默认 8）。 |
+| [tools/gate.sh](tools/gate.sh) | 214 | 门禁执行器。一条命令串行跑完 B0–B5，输出逐门 PASS/FAIL；**只在全部门通过时**才追加 `BENCH.json` 并刷新 `BENCH.md`；从不 commit/push。参数：`--processes N`（默认 3）、`--no-build`、`--baseline`、`--min-gain PCT`（默认 8）。 |
 
 ### 3.4 `src/` —— kernel 本体
 
@@ -304,16 +304,19 @@ python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰�
 11 个手写在 `harness/specs_manual.py`、`fused_ln_linear_gelu` 手写在 `harness/kernels.py`。
 生成器翻译不了就报 MANUAL——**不发明参考实现**，也不为了跑通放宽容差。
 
-已知缺陷 **10 个**（`verify_specs.py` 的 `KNOWN_FAIL`，全量验收时报 XFAIL 而不是 FAIL）：
-`W4A16_matmul`、`gpt2_transformer_block`、`grpo_surrogate_loss`、`int8_quantized_matmul`、
-`llama_transformer_block`、`lora_linear`、`matmul`、`sliding_window_self_attention`、
-`softmax_1D`、`swiglu_mlp_block`。
+已知缺陷 **8 个**（`verify_specs.py` 的 `KNOWN_FAIL`，全量验收时报 XFAIL 而不是 FAIL）：
+`W4A16_matmul`、`gpt2_transformer_block`、`int8_quantized_matmul`、`llama_transformer_block`、
+`lora_linear`、`matmul`、`sliding_window_self_attention`、`swiglu_mlp_block`。
 
 它们都是**存量 kernel 缺陷，不是 Spec 错**，每条都确认过两件事：
 ① 旧 `test.py` 自己就打印了 mismatch（只是裸 `compare_tensors` 丢弃返回值、`exit 0`；
-`softmax_1D` 更隐蔽——它的输出总和只有 0.009 而不是 1.0，而旧断言 `atol=1e-3` 比所有 softmax 值
-（≈1e-5）都大，所以照样通过）；
+最典型的是 `matmul`——它跑 TF32 张量核，对 fp32 参考差 0.11，远超旧 `atol=1e-2`，却被吞掉）；
 ② 把 Spec 的参考实现替换成 kernel 再跑旧测试 → 全部通过，说明参考实现与旧 torch 参考一致，差异来自 kernel。
+
+原名单里的 10 个已修好 2 个（2026-11）：`softmax_1D`（跨 block 归约的 `MD_F` 累加器
+`src/softmax.cu` 的 `reduce_mdf` 里只声明未初始化）与 `grpo_surrogate_loss`
+（`src/grpo_surrogate_loss.cu` 用 `torch::empty` 拿到未清零的累加器就 `atomicAdd`，
+改成 `torch::zeros`）。修完各自过 gate 并提交 `fix(<name>): …`。
 
 `gate.sh` 对这些 kernel 的 B2 如实 FAIL，并额外打印 `KNOWN` 原因行。容差一个都没放宽；
 要让它们变绿只能修 kernel（另开任务）。
@@ -329,7 +332,7 @@ python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰�
 - 下一步：
   1. 按工作流 B 对 `fused_ln_linear_gelu` 做一轮真实优化（先出 3 条假设再改码）；
   2. 给待优化 kernel 逐个 `gate.sh --baseline`，把 `BENCH.json` 的基线铺开；
-  3. 修 §6.5 里那 10 个已知缺陷 kernel（`matmul`、`softmax_1D` 等），修好一个就从 `KNOWN_FAIL` 删一条。
+  3. 修 §6.5 里那 8 个已知缺陷 kernel（`matmul`、`W4A16_matmul` 等），修好一个就从 `KNOWN_FAIL` 删一条。
 
 ### 7.1 迁移记录（2026-11）
 
@@ -342,6 +345,6 @@ python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰�
 | 步骤 | 内容 |
 |---|---|
 | 对账 | `tools/cross_check.py` 把 Spec 判定与旧 `test.py` 判定逐 kernel 比对，`SPEC_ONLY_FAIL=0` 才继续（多轮重复） |
-| 覆盖面 | `tools/verify_specs.py` 对账 92 个 `m.def`：90 个 Spec = 81 PASS + 9 XFAIL（已知 kernel 缺陷，见 §6.5）+ 2 SKIP（benchmark-only）；`--spot 40` 逐个确认 4×容差扰动会被拒 |
+| 覆盖面 | `tools/verify_specs.py` 对账 92 个 `m.def`：90 个 Spec = 82 PASS + 8 XFAIL（已知 kernel 缺陷，见 §6.5）+ 2 SKIP（benchmark-only）；`--spot 40` 逐个确认 4×容差扰动会被拒 |
 | 删除 | `test.py` 与 `profile/*.py` 整体删除；旧测试的语义（含它原本就空转的几处）原样搬进 Spec，未"顺手修好" |
 | 回看 | 旧文件仍在 git 历史里：`git show 4c3b656:test.py` |

@@ -49,10 +49,6 @@ KNOWN_FAIL = {
     "gpt2_transformer_block":
         "max|diff|~158-258 against tol=1.0; legacy also printed 98/98304 "
         "mismatched elements",
-    "grpo_surrogate_loss":
-        "the kernel accumulates a 4.2M-element loss in an uninitialised "
-        "buffer, so its value depends on allocator state; legacy reported "
-        "max|diff|=8.05 on the same tolerance",
     "int8_quantized_matmul":
         "2549/20000000 elements off by 1 after round(); legacy reported 189 "
         "mismatched elements on the same tolerance",
@@ -68,11 +64,6 @@ KNOWN_FAIL = {
     "sliding_window_self_attention":
         "max|diff|~0.01-0.02 against tol=1e-3; legacy reported 103/640000 "
         "mismatched elements",
-    "softmax_1D":
-        "the kernel only fills part of the output: its values sum to ~0.009 "
-        "instead of 1.0, and it emits NaN on some launches.  Legacy's "
-        "assert torch.allclose(atol=1e-3) hid this because every softmax "
-        "value is ~1e-5, far below atol",
     "swiglu_mlp_block":
         "max|diff|=0.86 against tol=1e-3; legacy reported 4189/4498500 "
         "mismatched elements",
