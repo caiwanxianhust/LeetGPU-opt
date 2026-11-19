@@ -163,7 +163,9 @@ torch::Tensor grpo_surrogate_loss(
     TORCH_CHECK(log_pi_old.size(0) == B && log_pi_old.size(1) == G, "log_pi_old must have shape (B, G, S)");
     TORCH_CHECK(log_ref.size(0) == B && log_ref.size(1) == G, "log_ref must have shape (B, G, S)");
 
-    torch::Tensor output = torch::empty({1}, rewards.options());
+    // The loss is accumulated with atomicAdd across (B, G) blocks, so the
+    // buffer must start at zero; torch::empty left allocator garbage in it.
+    torch::Tensor output = torch::zeros({1}, rewards.options());
     grpo_surrogate_loss_cuda(
         rewards.data_ptr<float>(),
         log_pi.data_ptr<float>(),
