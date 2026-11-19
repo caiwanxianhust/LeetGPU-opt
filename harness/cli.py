@@ -95,9 +95,9 @@ def _md_row(record: dict) -> str:
 
 def _emit(args, record: dict) -> int:
     agg = record["agg"]
-    print(f"# seed={SEED} procs={agg['procs']} median={agg['median']:.3f}ms "
-          f"min={agg['min']:.3f}ms p90={agg['p90']:.3f}ms cv={agg['cv']:.2f}% "
-          f"spread={agg['spread_pct']:.1f}%", file=sys.stderr)
+    print(f"# agg: procs={agg['procs']} n={agg.get('n', '?')} "
+          f"median={agg['median']:.3f}ms min={agg['min']:.3f}ms p90={agg['p90']:.3f}ms "
+          f"spread={agg['spread_pct']:.1f}% worst_cv={agg['cv']:.2f}%", file=sys.stderr)
     if args.json == "-":
         print(json.dumps(record, ensure_ascii=False))
     elif args.markdown:
@@ -175,7 +175,8 @@ def _run_procs(args, canonical: str, spec) -> int:
         child = json.loads(proc.stdout)
         stats.append(measure.Stats(**child["procs"][0]))
         print(f"# proc {i + 1}/{args.procs}: median={stats[-1].median:.3f}ms "
-              f"cv={stats[-1].cv:.2f}%", file=sys.stderr)
+              f"min={stats[-1].min:.3f}ms cv={stats[-1].cv:.2f}% n={stats[-1].n}",
+              file=sys.stderr)
 
     agg = measure.aggregate(stats)
     ref = _torch_ref(spec, agg["median"]) if args.ref == "torch" else None

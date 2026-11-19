@@ -98,5 +98,6 @@ def aggregate(per_proc: Sequence[Stats]) -> dict:
         "p90": max(s.p90 for s in per_proc),
         "spread_pct": spread,
         "cv": worst.cv,
+        "n": int(statistics.median([s.n for s in per_proc])),
         "procs": len(per_proc),
     }
