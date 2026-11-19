@@ -9,6 +9,7 @@
 ## 目录约定
 
 ```
+README.md       # 教程：目录与文件逐个说明、数据流、常见任务
 setup.py        # 唯一构建入口（内存感知 MAX_JOBS + CUDAExtension）
 test.py         # 【legacy】存量 kernel 的正确性测试（非 pytest）
 harness/        # 评估框架：spec / registry / measure / judge / store / report / cli
@@ -24,7 +25,7 @@ build/          # setuptools 中间产物（已 gitignore）
 leetgpu.cpython-310-x86_64-linux-gnu.so  # 就地构建的扩展（已 gitignore）
 ```
 
-没有 README / Makefile / CMakeLists.txt / pyproject.toml。**构建只能走 `setup.py`**。
+没有 Makefile / CMakeLists.txt / pyproject.toml。**构建只能走 `setup.py`**。结构与每个文件的职责见 `README.md`。
 
 新增一个 kernel 的完整改动面见「工作流 A」。`setup.py` 用 `glob.glob("src/*.cu")` 全量编译，所以 `src/` 里放进去就会参与编译；注意改 `cuda_kernels.cuh` / `utils.cuh` 会波及全部 97 个 kernel。
 
@@ -73,9 +74,9 @@ python3 -c 'import test; test.fused_layernorm_linear_gelu()'
 
 判读方式（**门禁必须机器可判**）：
 - 新增 kernel 一律写 `assert compare_tensors(...)`，失败即 AssertionError → 非零退出。
-- 存量测试有两派：早期 31 处 `assert torch.allclose(...)` 可靠；后期 72 处裸 `compare_tensors(...)`
-  丢弃返回值，**比较失败也 exit 0**，只能靠输出里的 `mismatch` / `Maximum difference` 关键字识别。
-  `tools/gate.sh` 的 B2 同时用「退出码 0」和「无 mismatch 标记」两个判据，不要只看退出码。
+- 存量测试有两派：早期 28 处 `assert torch.allclose(...)`（全文件共 31 条 assert）可靠；后期 71 处裸
+  `compare_tensors(...)` 调用丢弃返回值，**比较失败也 exit 0**，只能靠输出里的 `mismatch` / `Maximum difference`
+  关键字识别。`tools/gate.sh` 的 B2 走 `harness check`，不要只看退出码。
 - 测试默认要求 GPU 可用，故同样受家规 4 约束。
 
 ## 跑分 / 剖析
