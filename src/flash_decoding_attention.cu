@@ -19,8 +19,13 @@ static __global__ void flash_decoding_chunked_attention_kernel(
     float* __restrict__ lse,                    // [T, H, num_chunks]
     int T, int S, int H, int D)
 {
-    const int chunk_idx = blockIdx.x;
-    const int head_idx = blockIdx.y;
+    // grid.x is the head and grid.y the chunk, so the blocks that are resident at
+    // the same time cover all H heads of one row window: one row of K/V is
+    // H * D * 4 contiguous bytes, and the blocks read it as a whole instead of
+    // each one pulling a lone D * 4 byte slice out of a row that is H times wider.
+    // That keeps the DRAM pages of a row fully used while they are open.
+    const int chunk_idx = blockIdx.y;
+    const int head_idx = blockIdx.x;
     const int query_idx = blockIdx.z;
     const int start_chunk = chunk_idx * CHUNK_SIZE;
     const int eff_chunk = min(CHUNK_SIZE, S - start_chunk);
@@ -112,8 +117,9 @@ static __global__ void flash_decoding_chunked_attention_kernel_d128(
     constexpr int ROWS_PER_WARP = CHUNK_SIZE / NUM_WARPS;   // 32
     constexpr int COLS_PER_LANE = D / 32;                   // 4
 
-    const int chunk_idx = blockIdx.x;
-    const int head_idx = blockIdx.y;
+    // Head-major block order, same reason as the generic kernel above.
+    const int chunk_idx = blockIdx.y;
+    const int head_idx = blockIdx.x;
     const int query_idx = blockIdx.z;
     const int start_chunk = chunk_idx * CHUNK_SIZE;
     const int eff_chunk = min(CHUNK_SIZE, S - start_chunk);
@@ -442,7 +448,7 @@ static void flash_decoding_chunked_attention(
     dim3 block(128);
 
     if (D == D_SPECIALIZED) {
-        dim3 grid(num_chunks, H, T);
+        dim3 grid(H, num_chunks, T);   // x = head, y = chunk
         flash_decoding_chunked_attention_kernel_d128<<<grid, block>>>(
             Q, K, V, d_O_chunk, d_lse, T, S, H);
         CHECK_CUDA_ERROR(cudaGetLastError());
@@ -454,7 +460,7 @@ static void flash_decoding_chunked_attention(
         return;
     }
 
-    dim3 grid(num_chunks, H, T);
+    dim3 grid(H, num_chunks, T);   // x = head, y = chunk
     flash_decoding_chunked_attention_kernel<<<grid, block, D * sizeof(float)>>>(
         Q, K, V, d_O_chunk, d_lse, T, S, H, D);
     CHECK_CUDA_ERROR(cudaGetLastError());
