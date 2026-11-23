@@ -4,8 +4,8 @@
 `leetgpu`；仓库自带一套**可复现的测量、判定、记账流程**，让"新增 kernel"和"优化 kernel"都有机器可判的门槛，
 而不是靠肉眼看打印出来的毫秒数。
 
-> 写给未来的自己 / 协作者：**先读本文，再读 [AGENTS.md](AGENTS.md)**。
-> 本文解释"东西都在哪、各自干什么"，AGENTS.md 规定"动手时必须按什么顺序、过哪些门"。
+> 写给未来的自己 / 协作者：**先读本文**。本文解释"东西都在哪、各自干什么"，
+> 以及动手时必须按什么顺序、过哪些门（见 §6「常见任务」与 `tools/gate.sh`）。
 
 ---
 
@@ -44,13 +44,13 @@ leetgpu/
 ├── harness/              # ★ 评估框架：规格、比较、测量、判定、记账（4.5k 行）
 ├── bench.py              # 兼容壳 → harness run
 ├── tools/gate.sh         # 门禁执行器（B0–B5）
-├── BENCH.json            # 机器可读测量历史
+├── BENCH.json            # 机器可读测量历史（本地生成，不入库）
 ├── BENCH.md              # 人读账本（表格自动生成 + 手写散文）
-├── AGENTS.md             # 给 agent 的工作流与家规
+├── docs/                 # 设计/优化记录（docs/flash_decoding_attention.md）
 ├── src/                  # 98 个 *.cu（97 个 kernel + bindings.cu）+ 2 个头文件
 ├── build/                # 构建中间产物（gitignore）
 ├── leetgpu.cpython-310-x86_64-linux-gnu.so   # 构建产物（gitignore）
-└── .vscode/              # 编辑器 *.cu→cpp 语言关联
+└── .vscode/              # 编辑器 *.cu→cpp 语言关联（本地，不入库）
 ```
 
 数据流一句话：**Spec 造输入 → 直接调 pybind 入口 → CUDA Event 计时 → 统计 → 判定 → 写 `BENCH.json` → 渲染 `BENCH.md`**。
@@ -65,10 +65,9 @@ leetgpu/
 |---|---|---|
 | [setup.py](setup.py) | 154 | **唯一构建入口**。`_adaptive_jobs()` 读 `/proc/meminfo` 决定并发数；`glob.glob("src/*.cu")` 全量编译；硬编码 CUTLASS include、`-arch=sm_89 -std=c++17`；产物 `--inplace` 落到仓库根。改 GPU 架构只能改这里。 |
 | [bench.py](bench.py) | 14 | 兼容壳。`python3 bench.py <k> [flags]` 等价于 `python3 -m harness run <k> [flags]`，保留旧习惯与旧脚本。 |
-| [AGENTS.md](AGENTS.md) | 185 | 给 agent 的契约：工作流 A（新增）/ B（优化）、门表 B0–B5、5 条家规。**动手前必读**。 |
 | [BENCH.md](BENCH.md) | 51 | 人读账本。分四段：协议、生成表格（标记区间内自动覆盖）、历史存档（旧口径，不参与判定）、噪声带结论。 |
-| [BENCH.json](BENCH.json) | — | 机器可读历史，每条含 `so_sha256`、git commit/dirty、GPU、torch/cuda 版本、每进程统计、聚合值、torch 参考。目前 2 条。 |
-| [.gitignore](.gitignore) | 6 | 忽略 `build/`、`*.ncu-rep`、根目录 `.so`、`__pycache__/`、`*.py[cod]`。**新增产物类型必须同步补这里**（家规 1）。 |
+| `BENCH.json` | — | 机器可读历史，每条含 `so_sha256`、git commit/dirty、GPU、torch/cuda 版本、每进程统计、聚合值、torch 参考。**本地生成，不入库**；新克隆没有基线，先跑一次 `bash tools/gate.sh <name> --baseline` 建库。 |
+| [.gitignore](.gitignore) | 28 | 忽略构建产物（`build/`、`*.ncu-rep`、`/leetgpu*.so`）、Python 缓存、编辑器/OS 杂项，以及**只该留在本地的文件**（`AGENTS.md`、`BENCH.json`、两个一次性脚本）。**新增产物类型必须同步补这里**（家规 1）。 |
 | `.vscode/` | — | 仅把 `*.cu`/`*.cuh` 关联成 C++，便于跳转，无构建作用。 |
 
 ### 3.2 `harness/` —— 评估框架（新）
@@ -95,9 +94,8 @@ leetgpu/
 
 | 文件 | 行数 | 作用 |
 |---|---|---|
-| [tools/import_specs.py](tools/import_specs.py) | 978 | 旧 `test.py` → `harness/specs_legacy.py` 的翻译器：解析每个测试函数的输入构造/参考/比较三段的依赖闭包，机械生成 `_make_*`/`_ref_*`；翻译不了（自比自、参考要看调用前的值、逐输出容差不同…）一律报 MANUAL 交给手写文件，**绝不发明参考实现**。 |
 | [tools/verify_specs.py](tools/verify_specs.py) | 210 | 全量验收：`bindings.cu` 的 93 个 `m.def` 对账 91 个 Spec（2 个 benchmark-only 报 SKIP）、逐个跑 `harness check`、`--spot N` 做扰动自检（把候选输出移动 4×(atol+rtol·|ref|) 后比较**必须失败**，否则 Spec 是空转的）。已知缺陷写在 `KNOWN_FAIL`（10 条，旧测试同样失败，报 XFAIL）。 |
-| [tools/cross_check.py](tools/cross_check.py) | 141 | 一次性对账：同一 kernel 分别用 Spec 和旧 `test.py` 判定，只关心 `SPEC_ONLY_FAIL`（旧测过、Spec 不过 = 翻译错了）；`KNOWN_FAIL` 里的 kernel 两边都随机翻脸，跳过不计。`test.py` 已删，要重跑得先 `git show 4c3b656:test.py > test.py`。 |
+| 一次性脚本（不入库） | — | `tools/import_specs.py`（旧 `test.py` → `harness/specs_legacy.py` 的翻译器，报 MANUAL 交给手写，**绝不发明参考实现**）与 `tools/cross_check.py`（Spec 与旧测试逐 kernel 对账，只关心 `SPEC_ONLY_FAIL`）。两者都已完成使命，仅留在本地、被 `.gitignore` 忽略；要重跑需先 `git show 4c3b656:test.py > test.py`。 |
 | [tools/gate.sh](tools/gate.sh) | 214 | 门禁执行器。一条命令串行跑完 B0–B5，输出逐门 PASS/FAIL；**只在全部门通过时**才追加 `BENCH.json` 并刷新 `BENCH.md`；从不 commit/push。参数：`--processes N`（默认 3）、`--no-build`、`--baseline`、`--min-gain PCT`（默认 8）。 |
 
 ### 3.4 `src/` —— kernel 本体
@@ -300,7 +298,7 @@ python3 tools/verify_specs.py --spot 10       # 91 个 Spec 全跑 + 10 个扰�
 | `bash tools/gate.sh gelu` | 走完 B1–B5 并给出 PASS/FAIL |
 | `python3 tools/verify_specs.py --spot 10` | 91 个 Spec 全量 + 扰动自检 |
 
-这 91 个 Spec 的来源分三类（§3.2）：78 个由 `tools/import_specs.py` 从旧 `test.py` 机械翻译、
+这 91 个 Spec 的来源分三类（§3.2）：78 个由本地脚本 `tools/import_specs.py`（不入库）从旧 `test.py` 机械翻译、
 11 个手写在 `harness/specs_manual.py`、2 个手写在 `harness/kernels.py`
 （`fused_ln_linear_gelu`、`flash_decoding_attention`）。
 生成器翻译不了就报 MANUAL——**不发明参考实现**，也不为了跑通放宽容差。
@@ -346,7 +344,7 @@ python3 tools/verify_specs.py --spot 10       # 91 个 Spec 全跑 + 10 个扰�
 
 | 步骤 | 内容 |
 |---|---|
-| 对账 | `tools/cross_check.py` 把 Spec 判定与旧 `test.py` 判定逐 kernel 比对，`SPEC_ONLY_FAIL=0` 才继续（多轮重复） |
+| 对账 | 本地脚本 `tools/cross_check.py`（不入库）把 Spec 判定与旧 `test.py` 判定逐 kernel 比对，`SPEC_ONLY_FAIL=0` 才继续（多轮重复） |
 | 覆盖面 | `tools/verify_specs.py` 对账 92 个 `m.def`：90 个 Spec = 82 PASS + 8 XFAIL（已知 kernel 缺陷，见 §6.5）+ 2 SKIP（benchmark-only）；`--spot 40` 逐个确认 4×容差扰动会被拒 |
 | 删除 | `test.py` 与 `profile/*.py` 整体删除；旧测试的语义（含它原本就空转的几处）原样搬进 Spec，未"顺手修好" |
 | 回看 | 旧文件仍在 git 历史里：`git show 4c3b656:test.py` |

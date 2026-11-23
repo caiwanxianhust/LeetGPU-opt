@@ -510,7 +510,7 @@ flash_decoding_chunked_attention(..., at::cuda::getCurrentCUDAStream());  // 两
 
 ```bash
 cd /home/houlai/resumeProject/hpc/leetgpu
-python3 setup.py build_ext --inplace          # 需要 Full access（AGENTS.md 家规 4）
+python3 setup.py build_ext --inplace          # 需要 Full access（见 README §环境要求）
 python3 -m harness check flash_decoding_attention
 python3 -m harness run flash_decoding_attention --procs 3
 sudo ncu --set full -s 10 -c 2 python3 -m harness run flash_decoding_attention --ncu

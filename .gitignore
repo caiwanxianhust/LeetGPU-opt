@@ -1,9 +1,28 @@
 build/
 *.ncu-rep
-leetgpu.cpython-310-x86_64-linux-gnu.so
+/leetgpu*.so
 # Python 字节码缓存
 __pycache__/
 *.py[cod]
 
-# 本地编辑器配置（.vscode/ 不入库）
+# 本地编辑器 / 操作系统（.vscode/ 不入库）
 .vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Python 工具缓存与虚拟环境
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+venv/
+
+# 本地 agent 说明与单机产物：只留在磁盘，不入库
+/AGENTS.md
+/BENCH.json
+/tools/import_specs.py
+/tools/cross_check.py
