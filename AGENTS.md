@@ -19,6 +19,7 @@ harness/        # 评估框架：spec / registry / checker / measure / judge / s
 bench.py        # 兼容壳：转发到 python3 -m harness run
 BENCH.json      # 机器可读测量历史（含 so_sha256、commit、GPU 指纹）
 BENCH.md        # 人读账本；表格由 harness report 生成，散文手写
+docs/           # 设计/优化记录（每个 kernel 一篇，含代码段与实测数字）
 tools/gate.sh   # 门禁：B1 build → B2 check → B3 run+compare → B4 卫生 → B5 记账
 tools/verify_specs.py  # 全量验收：coverage + 每个 Spec 的 check + --spot 扰动自检
 tools/cross_check.py   # 一次性对账：Spec 判定 vs 旧 test.py 判定（需从 git 历史取回 test.py）
