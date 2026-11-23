@@ -2,6 +2,8 @@
 #include "cuda_kernels.cuh"
 
 #include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 
 static constexpr int CHUNK_SIZE = 128;
 
@@ -560,7 +562,8 @@ static __global__ void flash_decoding_reduce_attention_kernel_d128(
 static void flash_decoding_chunked_attention(
     const float* Q, const float* K, const float* V, float* output,
     float* d_O_chunk, float* d_lse,
-    int T, int S, int H, int D)
+    int T, int S, int H, int D,
+    cudaStream_t stream)
 {
     const int num_chunks = div_up(S, CHUNK_SIZE);
     dim3 block(128);
@@ -570,30 +573,30 @@ static void flash_decoding_chunked_attention(
             // Four neighbouring heads per block: their K/V slices of one row are
             // contiguous, so the row's DRAM page is read in one go.
             dim3 grid(H / HEADS_PER_BLOCK, num_chunks, T);
-            flash_decoding_chunked_attention_kernel_d128_heads4<<<grid, block>>>(
+            flash_decoding_chunked_attention_kernel_d128_heads4<<<grid, block, 0, stream>>>(
                 Q, K, V, d_O_chunk, d_lse, T, S, H);
         } else {
             dim3 grid(H, num_chunks, T);   // x = head, y = chunk
-            flash_decoding_chunked_attention_kernel_d128<<<grid, block>>>(
+            flash_decoding_chunked_attention_kernel_d128<<<grid, block, 0, stream>>>(
                 Q, K, V, d_O_chunk, d_lse, T, S, H);
         }
         CHECK_CUDA_ERROR(cudaGetLastError());
 
         dim3 reduce_grid(H, T);
-        flash_decoding_reduce_attention_kernel_d128<<<reduce_grid, block, num_chunks * sizeof(float)>>>(
+        flash_decoding_reduce_attention_kernel_d128<<<reduce_grid, block, num_chunks * sizeof(float), stream>>>(
             output, d_O_chunk, d_lse, T, S, H);
         CHECK_CUDA_ERROR(cudaGetLastError());
         return;
     }
 
     dim3 grid(H, num_chunks, T);   // x = head, y = chunk
-    flash_decoding_chunked_attention_kernel<<<grid, block, D * sizeof(float)>>>(
+    flash_decoding_chunked_attention_kernel<<<grid, block, D * sizeof(float), stream>>>(
         Q, K, V, d_O_chunk, d_lse, T, S, H, D);
     CHECK_CUDA_ERROR(cudaGetLastError());
 
     grid = dim3(H, T);
     block = dim3(128);
-    flash_decoding_reduce_attention_kernel<<<grid, block, num_chunks * sizeof(float)>>>(
+    flash_decoding_reduce_attention_kernel<<<grid, block, num_chunks * sizeof(float), stream>>>(
         output, d_O_chunk, d_lse, T, S, H, D);
     CHECK_CUDA_ERROR(cudaGetLastError());
 }
@@ -618,10 +621,16 @@ Input values are in [-6, 6]
 Performance is measured with T = 1, S = 65,536, H = 32, D = 128
 
 The two-pass workspace (per-chunk partial outputs + per-chunk log-sum-exp) is
-kept in a file-static device buffer and only reallocated when a call needs more
-of it: a cudaMalloc/cudaFree pair costs several hundred microseconds (cudaFree
-additionally waits for the device to go idle), which would otherwise be paid on
-every invocation.
+allocated from the PyTorch caching allocator on every call, as one contiguous
+tensor of T * H * ceil(S / CHUNK_SIZE) * (D + 1) floats (8.06 MiB for the
+measured shape). The allocator hands the same size back out of its free list in
+about a microsecond, so the call does not pay a driver-level allocation, while
+the buffer stays visible to the framework: it is counted in the memory budget,
+freed back to the pool when the tensor goes out of scope, and safe to use from
+several threads. Going through cudaMalloc / cudaFree directly would cost several
+hundred microseconds per call (cudaFree additionally waits for the device to go
+idle). The kernels are launched on the current torch stream, so the workspace,
+the inputs and the output are all ordered by the same stream.
  */
 // Q, K, V, output are device pointers
 void flash_decoding_attention_cuda(
@@ -633,20 +642,14 @@ void flash_decoding_attention_cuda(
     const int64_t lse_elems = static_cast<int64_t>(T) * H * num_chunks;
     const int64_t scratch_elems = O_chunk_elems + lse_elems;
 
-    static float* g_scratch = nullptr;
-    static int64_t g_scratch_elems = 0;
-    if (scratch_elems > g_scratch_elems) {
-        if (g_scratch != nullptr) {
-            CHECK_CUDA_ERROR(cudaFree(g_scratch));
-        }
-        CHECK_CUDA_ERROR(cudaMalloc(reinterpret_cast<void**>(&g_scratch),
-                                    static_cast<size_t>(scratch_elems) * sizeof(float)));
-        g_scratch_elems = scratch_elems;
-    }
-    float* d_O_chunk = g_scratch;
+    torch::Tensor scratch = torch::empty(
+        {scratch_elems},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    float* d_O_chunk = scratch.data_ptr<float>();
     float* d_lse = d_O_chunk + O_chunk_elems;
 
-    flash_decoding_chunked_attention(Q, K, V, output, d_O_chunk, d_lse, T, S, H, D);
+    flash_decoding_chunked_attention(Q, K, V, output, d_O_chunk, d_lse, T, S, H, D,
+                                     at::cuda::getCurrentCUDAStream());
 }
 
 
@@ -656,6 +659,9 @@ torch::Tensor flash_decoding_attention(
     const torch::Tensor & K,
     const torch::Tensor & V
 ) {
+    // The workspace is allocated by the caching allocator for the current device,
+    // so pin it to the device that owns the inputs before touching anything else.
+    const c10::cuda::CUDAGuard device_guard(Q.device());
     TORCH_CHECK(Q.dim() == 3, "Q must be a 3D tensor [T, H, D]");
     TORCH_CHECK(K.dim() == 3, "K must be a 3D tensor [S, H, D]");
     TORCH_CHECK(V.dim() == 3, "V must be a 3D tensor [S, H, D]");
