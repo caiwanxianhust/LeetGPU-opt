@@ -25,6 +25,7 @@ commit 列带 `*` 表示记录时工作区有未提交改动（`git.dirty=true`�
 | 2026-11-18 | 0c4ae54 | fused_ln_linear_gelu | 4096x4096x4096 | fp32 | 19.703 | 19.338 | -0.5% (+0.106 ms) | 1.05x | gate |
 | 2026-11-19 | 319ec02* | softmax_1D | 131072 | fp32 | 1.076 | 0.446 | 基线 | 0.05x | gate |
 | 2026-11-19 | 6a69f49* | grpo_surrogate_loss | 64x16 64x16x4096 64x16x4096 64x16x4096 | fp32 | 1.503 | 0.778 | 基线 | 1.31x | gate |
+| 2026-11-23 | 2d34bb8* | flash_decoding_attention | T1_S65536_H32_D128 | fp32 | 10.566 | 10.012 | 基线 | 0.89x | gate |
 <!-- BENCH:TABLE:END -->
 
 ## 历史（旧 `bench.py` 口径，仅存档不参与判定）
