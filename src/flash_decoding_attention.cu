@@ -161,11 +161,13 @@ static void flash_decoding_chunked_attention(
     dim3 block(128);
     flash_decoding_chunked_attention_kernel<<<grid, block, D * sizeof(float)>>>(
         Q, K, V, d_O_chunk, d_lse, T, S, H, D);
+    CHECK_CUDA_ERROR(cudaGetLastError());
 
     grid = dim3(H, T);
     block = dim3(128);
     flash_decoding_reduce_attention_kernel<<<grid, block, num_chunks * sizeof(float)>>>(
         output, d_O_chunk, d_lse, T, S, H, D);
+    CHECK_CUDA_ERROR(cudaGetLastError());
 
     CHECK_CUDA_ERROR(cudaFree(d_buf));
 }
@@ -204,10 +206,32 @@ torch::Tensor flash_decoding_attention(
     const torch::Tensor & K,
     const torch::Tensor & V
 ) {
-    int T = Q.size(0);
-    int S = K.size(0);
-    int H = K.size(1);
-    int D = K.size(2);
+    TORCH_CHECK(Q.dim() == 3, "Q must be a 3D tensor [T, H, D]");
+    TORCH_CHECK(K.dim() == 3, "K must be a 3D tensor [S, H, D]");
+    TORCH_CHECK(V.dim() == 3, "V must be a 3D tensor [S, H, D]");
+    TORCH_CHECK(Q.is_cuda(), "Q must be on CUDA");
+    TORCH_CHECK(K.is_cuda(), "K must be on CUDA");
+    TORCH_CHECK(V.is_cuda(), "V must be on CUDA");
+    TORCH_CHECK(Q.scalar_type() == torch::kFloat32, "Q must be of type float32");
+    TORCH_CHECK(K.scalar_type() == torch::kFloat32, "K must be of type float32");
+    TORCH_CHECK(V.scalar_type() == torch::kFloat32, "V must be of type float32");
+    TORCH_CHECK(Q.is_contiguous(), "Q must be contiguous");
+    TORCH_CHECK(K.is_contiguous(), "K must be contiguous");
+    TORCH_CHECK(V.is_contiguous(), "V must be contiguous");
+    TORCH_CHECK(K.sizes().equals(V.sizes()), "K and V must have the same shape [S, H, D]");
+    TORCH_CHECK(Q.device() == K.device() && Q.device() == V.device(),
+                "Q, K and V must live on the same device");
+    TORCH_CHECK(Q.size(0) >= 1 && K.size(0) >= 1, "T and S must be at least 1");
+    TORCH_CHECK(Q.size(1) == K.size(1),
+                "Q and K must agree on the number of heads H");
+    TORCH_CHECK(Q.size(2) == K.size(2),
+                "Q and K must agree on the head dimension D");
+    TORCH_CHECK(Q.size(2) >= 1, "D must be at least 1");
+
+    const int T = Q.size(0);
+    const int S = K.size(0);
+    const int H = K.size(1);
+    const int D = K.size(2);
     torch::Tensor output = torch::empty_like(Q);
 
     flash_decoding_attention_cuda(
@@ -217,5 +241,6 @@ torch::Tensor flash_decoding_attention(
         output.data_ptr<float>(),
         T, S, H, D
     );
+    CHECK_CUDA_ERROR(cudaGetLastError());
     return output;
 }
