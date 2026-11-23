@@ -278,9 +278,13 @@ static __global__ void flash_decoding_chunked_attention_kernel_d128(
 // heads together means those bytes come out of one open DRAM page instead of
 // four separate page activations.
 //
-// A chunk of one head fits in shared memory and belongs to exactly one warp, so
-// every phase (QK, softmax, PV) is warp-local: no block barrier, no cross-warp
-// partial combine, and the warp writes its D outputs as one float4 per lane.
+// K and V of a row are read in the same iteration and folded in with an online
+// softmax (running max, running sum, rescaled accumulator), so each lane has a
+// K load and a V load of every prefetched row in flight instead of one stream of
+// K and, later, one stream of V. The scores never go to shared memory, the chunk
+// of a head belongs to a single warp, and the warp stores its D outputs as one
+// float4 per lane: no barrier anywhere, and only the (acc, max, sum) triple is
+// written to the partial buffers.
 static constexpr int HEADS_PER_BLOCK = 4;
 
 static __global__ void flash_decoding_chunked_attention_kernel_d128_heads4(
@@ -292,9 +296,7 @@ static __global__ void flash_decoding_chunked_attention_kernel_d128_heads4(
     int T, int S, int H)
 {
     constexpr int D = D_SPECIALIZED;
-    constexpr int NUM_WARPS = HEADS_PER_BLOCK;
     constexpr int COLS_PER_LANE = D / 32;       // 4
-    constexpr int ROWS = CHUNK_SIZE;
 
     const int chunk_idx = blockIdx.y;
     const int query_idx = blockIdx.z;
@@ -315,102 +317,77 @@ static __global__ void flash_decoding_chunked_attention_kernel_d128_heads4(
         Q + (query_idx * H + head_idx) * D + col);
     const float softmax_scale = 1.0f / sqrtf(static_cast<float>(D));
 
-    __shared__ float s_scores_all[NUM_WARPS][ROWS];
-    float* s_scores = s_scores_all[warp_id];
-
     const int64_t row_stride = static_cast<int64_t>(H) * D;
 
-    // QK: one float4 of K per row, four rows prefetched so four 16-byte loads
-    // stay in flight per lane.
+    float row_max = -INFINITY;
+    float row_sum = 0.0f;
+    float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    // Two rows per iteration: four 16-byte loads (K and V of both rows) are
+    // issued before the first one is consumed.
     int r = 0;
-    for (; r + 3 < eff_chunk; r += 4) {
+    for (; r + 1 < eff_chunk; r += 2) {
         const int64_t base = static_cast<int64_t>(r) * row_stride + col;
         const float4 k0 = __ldg(reinterpret_cast<const float4*>(K_ptr + base));
-        const float4 k1 = __ldg(reinterpret_cast<const float4*>(K_ptr + base + row_stride));
-        const float4 k2 = __ldg(reinterpret_cast<const float4*>(K_ptr + base + 2 * row_stride));
-        const float4 k3 = __ldg(reinterpret_cast<const float4*>(K_ptr + base + 3 * row_stride));
-        float qk0 = q.x * k0.x + q.y * k0.y + q.z * k0.z + q.w * k0.w;
-        float qk1 = q.x * k1.x + q.y * k1.y + q.z * k1.z + q.w * k1.w;
-        float qk2 = q.x * k2.x + q.y * k2.y + q.z * k2.z + q.w * k2.w;
-        float qk3 = q.x * k3.x + q.y * k3.y + q.z * k3.z + q.w * k3.w;
-        qk0 = warp_all_reduce_sum(qk0) * softmax_scale;
-        qk1 = warp_all_reduce_sum(qk1) * softmax_scale;
-        qk2 = warp_all_reduce_sum(qk2) * softmax_scale;
-        qk3 = warp_all_reduce_sum(qk3) * softmax_scale;
-        if (lane_id == 0) {
-            s_scores[r] = qk0;
-            s_scores[r + 1] = qk1;
-            s_scores[r + 2] = qk2;
-            s_scores[r + 3] = qk3;
-        }
-    }
-    for (; r < eff_chunk; ++r) {
-        const float4 k = __ldg(reinterpret_cast<const float4*>(
-            K_ptr + static_cast<int64_t>(r) * row_stride + col));
-        float qk = q.x * k.x + q.y * k.y + q.z * k.z + q.w * k.w;
-        qk = warp_all_reduce_sum(qk) * softmax_scale;
-        if (lane_id == 0) {
-            s_scores[r] = qk;
-        }
-    }
-    __syncwarp();
-
-    // Softmax over the chunk, inside this warp only.
-    float max_score = -1e20f;
-    for (int i = lane_id; i < eff_chunk; i += 32) {
-        max_score = max(max_score, s_scores[i]);
-    }
-    max_score = warp_all_reduce_max(max_score);
-
-    float sum_exp_score = 0.0f;
-    for (int i = lane_id; i < eff_chunk; i += 32) {
-        const float e = expf(s_scores[i] - max_score);
-        s_scores[i] = e;
-        sum_exp_score += e;
-    }
-    sum_exp_score = warp_all_reduce_sum(sum_exp_score);
-
-    const float inv_sum = 1.0f / sum_exp_score;
-    for (int i = lane_id; i < eff_chunk; i += 32) {
-        s_scores[i] *= inv_sum;
-    }
-    __syncwarp();
-
-    // PV over the whole chunk; four rows prefetched per iteration.
-    float4 acc = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-    r = 0;
-    for (; r + 3 < eff_chunk; r += 4) {
-        const int64_t base = static_cast<int64_t>(r) * row_stride + col;
         const float4 v0 = __ldg(reinterpret_cast<const float4*>(V_ptr + base));
+        const float4 k1 = __ldg(reinterpret_cast<const float4*>(K_ptr + base + row_stride));
         const float4 v1 = __ldg(reinterpret_cast<const float4*>(V_ptr + base + row_stride));
-        const float4 v2 = __ldg(reinterpret_cast<const float4*>(V_ptr + base + 2 * row_stride));
-        const float4 v3 = __ldg(reinterpret_cast<const float4*>(V_ptr + base + 3 * row_stride));
-        const float w0 = s_scores[r];
-        const float w1 = s_scores[r + 1];
-        const float w2 = s_scores[r + 2];
-        const float w3 = s_scores[r + 3];
-        acc.x += w0 * v0.x + w1 * v1.x + w2 * v2.x + w3 * v3.x;
-        acc.y += w0 * v0.y + w1 * v1.y + w2 * v2.y + w3 * v3.y;
-        acc.z += w0 * v0.z + w1 * v1.z + w2 * v2.z + w3 * v3.z;
-        acc.w += w0 * v0.w + w1 * v1.w + w2 * v2.w + w3 * v3.w;
+
+        float s0 = q.x * k0.x + q.y * k0.y + q.z * k0.z + q.w * k0.w;
+        float s1 = q.x * k1.x + q.y * k1.y + q.z * k1.z + q.w * k1.w;
+        s0 = warp_all_reduce_sum(s0) * softmax_scale;
+        s1 = warp_all_reduce_sum(s1) * softmax_scale;
+
+        const float m0 = max(row_max, s0);
+        const float a0 = expf(row_max - m0);
+        const float b0 = expf(s0 - m0);
+        row_max = m0;
+        row_sum = row_sum * a0 + b0;
+        acc.x = acc.x * a0 + b0 * v0.x;
+        acc.y = acc.y * a0 + b0 * v0.y;
+        acc.z = acc.z * a0 + b0 * v0.z;
+        acc.w = acc.w * a0 + b0 * v0.w;
+
+        const float m1 = max(row_max, s1);
+        const float a1 = expf(row_max - m1);
+        const float b1 = expf(s1 - m1);
+        row_max = m1;
+        row_sum = row_sum * a1 + b1;
+        acc.x = acc.x * a1 + b1 * v1.x;
+        acc.y = acc.y * a1 + b1 * v1.y;
+        acc.z = acc.z * a1 + b1 * v1.z;
+        acc.w = acc.w * a1 + b1 * v1.w;
     }
     for (; r < eff_chunk; ++r) {
-        const float weight = s_scores[r];
-        const float4 v = __ldg(reinterpret_cast<const float4*>(
-            V_ptr + static_cast<int64_t>(r) * row_stride + col));
-        acc.x += weight * v.x;
-        acc.y += weight * v.y;
-        acc.z += weight * v.z;
-        acc.w += weight * v.w;
+        const int64_t base = static_cast<int64_t>(r) * row_stride + col;
+        const float4 k = __ldg(reinterpret_cast<const float4*>(K_ptr + base));
+        const float4 v = __ldg(reinterpret_cast<const float4*>(V_ptr + base));
+        float score = q.x * k.x + q.y * k.y + q.z * k.z + q.w * k.w;
+        score = warp_all_reduce_sum(score) * softmax_scale;
+        const float m = max(row_max, score);
+        const float a = expf(row_max - m);
+        const float b = expf(score - m);
+        row_max = m;
+        row_sum = row_sum * a + b;
+        acc.x = acc.x * a + b * v.x;
+        acc.y = acc.y * a + b * v.y;
+        acc.z = acc.z * a + b * v.z;
+        acc.w = acc.w * a + b * v.w;
     }
 
+    const float inv_sum = 1.0f / row_sum;
+    acc.x *= inv_sum;
+    acc.y *= inv_sum;
+    acc.z *= inv_sum;
+    acc.w *= inv_sum;
     *reinterpret_cast<float4*>(output_ptr + col) = acc;
 
     if (lane_id == 0) {
         lse[(query_idx * H + head_idx) * num_chunks + chunk_idx] =
-            max_score + logf(sum_exp_score);
+            row_max + logf(row_sum);
     }
 }
+
 
 static __global__ void flash_decoding_reduce_attention_kernel(
     float* __restrict__ output,
