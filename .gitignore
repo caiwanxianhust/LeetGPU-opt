@@ -21,8 +21,3 @@ Thumbs.db
 .venv/
 venv/
 
-# 本地 agent 说明与单机产物：只留在磁盘，不入库
-/AGENTS.md
-/BENCH.json
-/tools/import_specs.py
-/tools/cross_check.py
