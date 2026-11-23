@@ -484,6 +484,13 @@ torch::Tensor fused_ln_linear_gelu(
 ); 
 
 
+torch::Tensor flash_decoding_attention(
+    const torch::Tensor &Q,
+    const torch::Tensor &K,
+    const torch::Tensor &V
+);
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("vector_add", &vector_add, "Vector Addition (CUDA)");
     m.def("matmul", &matrix_multiplication, "Matrix Multiplication (CUDA)");
@@ -577,4 +584,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("multi_lora_batched_linear", &multi_lora_batched_linear, "Multi LoRA Batched Linear (CUDA)");
     m.def("fused_adamw", &fused_adamw, "Fused AdamW Optimizer (CUDA)");
     m.def("fused_ln_linear_gelu", &fused_ln_linear_gelu, "Fused LayerNorm + Linear + GELU (CUDA)");
+    m.def("flash_decoding_attention", &flash_decoding_attention, "Flash Decoding Attention (CUDA)");
 }

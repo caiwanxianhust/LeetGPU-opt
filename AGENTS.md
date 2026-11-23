@@ -22,15 +22,15 @@ BENCH.md        # 人读账本；表格由 harness report 生成，散文手写
 tools/gate.sh   # 门禁：B1 build → B2 check → B3 run+compare → B4 卫生 → B5 记账
 tools/verify_specs.py  # 全量验收：coverage + 每个 Spec 的 check + --spot 扰动自检
 tools/cross_check.py   # 一次性对账：Spec 判定 vs 旧 test.py 判定（需从 git 历史取回 test.py）
-src/            # 97 个 *.cu（一个题目一个文件）+ cuda_kernels.cuh + utils.cuh
-src/bindings.cu # 顶部集中声明全部签名 + PYBIND11_MODULE 里 92 个 m.def 注册点
+src/            # 98 个 *.cu（一个题目一个文件）+ cuda_kernels.cuh + utils.cuh
+src/bindings.cu # 顶部集中声明全部签名 + PYBIND11_MODULE 里 93 个 m.def 注册点
 build/          # setuptools 中间产物（已 gitignore）
 leetgpu.cpython-310-x86_64-linux-gnu.so  # 就地构建的扩展（已 gitignore）
 ```
 
 没有 Makefile / CMakeLists.txt / pyproject.toml。**构建只能走 `setup.py`**。结构与每个文件的职责见 `README.md`。
 
-新增一个 kernel 的完整改动面见「工作流 A」。`setup.py` 用 `glob.glob("src/*.cu")` 全量编译，所以 `src/` 里放进去就会参与编译；注意改 `cuda_kernels.cuh` / `utils.cuh` 会波及全部 97 个 kernel。
+新增一个 kernel 的完整改动面见「工作流 A」。`setup.py` 用 `glob.glob("src/*.cu")` 全量编译，所以 `src/` 里放进去就会参与编译；注意改 `cuda_kernels.cuh` / `utils.cuh` 会波及全部 98 个 kernel。
 
 ## 环境要求
 
@@ -56,7 +56,7 @@ python3 setup.py build_ext --inplace
   实测每个 nvcc 峰值 RSS **3.0–3.4 GiB**（大头是 `torch/extension.h`，与 kernel 大小无关；单个 TU 约 65 s），
   本机 12 核 / 10.3 GiB 可用 → 自动选 **2**。**并行度受内存限制，不是核数**，手动调到 4 以上会 OOM（历史故障）。
   显式 `MAX_JOBS=N` 优先；`LEETGPU_MEM_PER_JOB_MB` / `LEETGPU_MEM_RESERVE_MB` 可调。
-- `setup.py` 里用 `glob.glob("src/*.cu")` 全量编译；全量重建 ≈ 97 × 65 s / 2 ≈ 50 min，增量构建是常态。
+- `setup.py` 里用 `glob.glob("src/*.cu")` 全量编译；全量重建 ≈ 98 × 65 s / 2 ≈ 50 min，增量构建是常态。
 - 固定 `-arch=sm_89 -std=c++17`。换 GPU 架构需改 `setup.py`。
 - `--inplace` 把 `leetgpu*.so` 放到仓库根，`import leetgpu` 才能找到它（cwd 在 `sys.path[0]`）。
 
@@ -68,7 +68,7 @@ python3 setup.py build_ext --inplace
 cd /home/houlai/resumeProject/hpc/leetgpu
 python3 -m harness check <name>          # 单个：PASS/FAIL/SKIP + max|diff|
 python3 -m harness selftest              # 比较/判定语义自测，不需要 GPU
-python3 tools/verify_specs.py --spot 10  # 全量：coverage + 90 个 check + 10 个扰动自检
+python3 tools/verify_specs.py --spot 10  # 全量：coverage + 91 个 check + 10 个扰动自检
 python3 tools/cross_check.py --rounds 5  # 一次性对账（需先从 git 历史取回 test.py）
 ```
 
@@ -162,7 +162,7 @@ sudo ncu --set full -s 5 -c 1 -o /tmp/report_<name> python3 -m harness run <name
    该 kernel 的实测区间补上（人写部分不会被 `harness report` 覆盖）。
 
 > 硬约束：
-> - 改 `cuda_kernels.cuh` / `utils.cuh` 视为影响全部 97 个 kernel，必须补跑受影响 kernel 的 B2。
+> - 改 `cuda_kernels.cuh` / `utils.cuh` 视为影响全部 98 个 kernel，必须补跑受影响 kernel 的 B2。
 > - B1 与 B2/B3 必须在**同一次 gate 运行**内串行完成。`.so` 比源码旧、或 `git checkout` 刷新 mtime，
 >   都会让 mtime 判据失效——禁止拿隔夜的 `.so` 下结论。
 

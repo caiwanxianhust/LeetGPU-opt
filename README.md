@@ -47,7 +47,7 @@ leetgpu/
 ├── BENCH.json            # 机器可读测量历史
 ├── BENCH.md              # 人读账本（表格自动生成 + 手写散文）
 ├── AGENTS.md             # 给 agent 的工作流与家规
-├── src/                  # 97 个 *.cu（96 个 kernel + bindings.cu）+ 2 个头文件
+├── src/                  # 98 个 *.cu（97 个 kernel + bindings.cu）+ 2 个头文件
 ├── build/                # 构建中间产物（gitignore）
 ├── leetgpu.cpython-310-x86_64-linux-gnu.so   # 构建产物（gitignore）
 └── .vscode/              # 编辑器 *.cu→cpp 语言关联
@@ -96,7 +96,7 @@ leetgpu/
 | 文件 | 行数 | 作用 |
 |---|---|---|
 | [tools/import_specs.py](tools/import_specs.py) | 978 | 旧 `test.py` → `harness/specs_legacy.py` 的翻译器：解析每个测试函数的输入构造/参考/比较三段的依赖闭包，机械生成 `_make_*`/`_ref_*`；翻译不了（自比自、参考要看调用前的值、逐输出容差不同…）一律报 MANUAL 交给手写文件，**绝不发明参考实现**。 |
-| [tools/verify_specs.py](tools/verify_specs.py) | 210 | 全量验收：`bindings.cu` 的 92 个 `m.def` 对账 90 个 Spec（2 个 benchmark-only 报 SKIP）、逐个跑 `harness check`、`--spot N` 做扰动自检（把候选输出移动 4×(atol+rtol·|ref|) 后比较**必须失败**，否则 Spec 是空转的）。已知缺陷写在 `KNOWN_FAIL`（10 条，旧测试同样失败，报 XFAIL）。 |
+| [tools/verify_specs.py](tools/verify_specs.py) | 210 | 全量验收：`bindings.cu` 的 93 个 `m.def` 对账 91 个 Spec（2 个 benchmark-only 报 SKIP）、逐个跑 `harness check`、`--spot N` 做扰动自检（把候选输出移动 4×(atol+rtol·|ref|) 后比较**必须失败**，否则 Spec 是空转的）。已知缺陷写在 `KNOWN_FAIL`（10 条，旧测试同样失败，报 XFAIL）。 |
 | [tools/cross_check.py](tools/cross_check.py) | 141 | 一次性对账：同一 kernel 分别用 Spec 和旧 `test.py` 判定，只关心 `SPEC_ONLY_FAIL`（旧测过、Spec 不过 = 翻译错了）；`KNOWN_FAIL` 里的 kernel 两边都随机翻脸，跳过不计。`test.py` 已删，要重跑得先 `git show 4c3b656:test.py > test.py`。 |
 | [tools/gate.sh](tools/gate.sh) | 214 | 门禁执行器。一条命令串行跑完 B0–B5，输出逐门 PASS/FAIL；**只在全部门通过时**才追加 `BENCH.json` 并刷新 `BENCH.md`；从不 commit/push。参数：`--processes N`（默认 3）、`--no-build`、`--baseline`、`--min-gain PCT`（默认 8）。 |
 
@@ -104,13 +104,13 @@ leetgpu/
 
 | 路径 | 作用 |
 |---|---|
-| `src/bindings.cu` | **注册中心**。顶部集中声明全部 `torch::Tensor xxx(...)` 签名；底部 `PYBIND11_MODULE` 里 92 个 `m.def`。新增 kernel 要改这里的**两处**：声明 + `m.def`（只加 `m.def` 会编译失败）。 |
-| `src/cuda_kernels.cuh`（230 行） | 公共 device 工具（如 `div_up` 等）。**改它等于改 97 个 kernel**，必须补跑受影响 kernel 的正确性门。 |
+| `src/bindings.cu` | **注册中心**。顶部集中声明全部 `torch::Tensor xxx(...)` 签名；底部 `PYBIND11_MODULE` 里 93 个 `m.def`。新增 kernel 要改这里的**两处**：声明 + `m.def`（只加 `m.def` 会编译失败）。 |
+| `src/cuda_kernels.cuh`（230 行） | 公共 device 工具（如 `div_up` 等）。**改它等于改 98 个 kernel**，必须补跑受影响 kernel 的正确性门。 |
 | `src/utils.cuh`（168 行） | 另一组公共工具/宏，同样有全局影响。 |
-| 其余 96 个 `*.cu` | 一题一文件（`gelu.cu`、`matmul`、`flash_attn`…）。统一模式：文件内 `static __global__` kernel + `xxx_cuda(...)` 启动封装 + 一个 `torch::Tensor xxx(...)` 的 pybind 包装（内部 `torch::empty` 分配输出）。**这些是唯一不许乱动的部分**，重构只围绕它们外围。 |
+| 其余 97 个 `*.cu` | 一题一文件（`gelu.cu`、`matmul`、`flash_attn`…）。统一模式：文件内 `static __global__` kernel + `xxx_cuda(...)` 启动封装 + 一个 `torch::Tensor xxx(...)` 的 pybind 包装（内部 `torch::empty` 分配输出）。**这些是唯一不许乱动的部分**，重构只围绕它们外围。 |
 
-> 当前统计：97 个 `.cu`（96 kernel + bindings）、92 个 `m.def`、**90 个 Spec**（另有 2 个 benchmark-only
-> kernel 没有参考实现）。92 个 pybind 名里有 27 个与旧测试函数名不同（`vector_add`↔`vector_addition`、
+> 当前统计：98 个 `.cu`（97 kernel + bindings）、93 个 `m.def`、**91 个 Spec**（另有 2 个 benchmark-only
+> kernel 没有参考实现）。93 个 pybind 名里有 27 个与旧测试函数名不同（`vector_add`↔`vector_addition`、
 > `matmul`↔`matrix_multiplication`、`fused_ln_linear_gelu`↔`fused_layernorm_linear_gelu`、`prefxix_sum` 拼写错误…）。
 > 约定是**不改名**：`Spec.name` 永远等于 pybind 名，旧测试函数名只留在 `Spec.test_fn` 里供对账。
 
@@ -146,7 +146,7 @@ jobs = clamp(1, (MemAvailable - 2 GiB) / 3.45 GiB, nproc)     # → 通常 2
 ```
 
 - 显式 `MAX_JOBS=N` 优先；`LEETGPU_MEM_PER_JOB_MB` / `LEETGPU_MEM_RESERVE_MB` 可调。
-- 全量重建 ≈ 97×65 s / 2 ≈ **50 min**，所以日常几乎都是增量构建。
+- 全量重建 ≈ 98×65 s / 2 ≈ **50 min**，所以日常几乎都是增量构建。
 - 构建后端是 torch 默认的 ninja（`ninja 1.13` 已装），`MAX_JOBS` 直接限制它的并行度。
 
 ---
@@ -273,7 +273,7 @@ python3 -m harness run <name> --procs 3 --ref torch
 python3 -m harness run <name> --markdown      # 打印一行 BENCH.md 表格
 python3 -m harness selftest                   # 判定 + 比较语义自测，不需要 GPU
 python3 -m harness report                     # 用 BENCH.json 重刷 BENCH.md 表格
-python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰动自检
+python3 tools/verify_specs.py --spot 10       # 91 个 Spec 全跑 + 10 个扰动自检
 ```
 
 ### 6.4 排查
@@ -290,7 +290,7 @@ python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰�
 
 ### 6.5 哪些 kernel 已经能走 harness？
 
-**90 个都能**（`m.def` 共 92 个，差的是 2 个 benchmark-only kernel：`adder_transformer_inference`、
+**91 个都能**（`m.def` 共 93 个，差的是 2 个 benchmark-only kernel：`adder_transformer_inference`、
 `ssm_selective_scan`，它们没有 torch 参考，`harness check` 会打印 SKIP、`harness run` 照常测时）。
 
 | 命令 | 结果 |
@@ -298,10 +298,11 @@ python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰�
 | `python3 -m harness run gelu` | 正常测量，输出一行 CSV |
 | `python3 -m harness check gelu` | `PASS gelu: 1 output, max|diff|=… within atol=… rtol=…`，退出码 0 |
 | `bash tools/gate.sh gelu` | 走完 B1–B5 并给出 PASS/FAIL |
-| `python3 tools/verify_specs.py --spot 10` | 90 个 Spec 全量 + 扰动自检 |
+| `python3 tools/verify_specs.py --spot 10` | 91 个 Spec 全量 + 扰动自检 |
 
-这 90 个 Spec 的来源分两类（§3.2）：78 个由 `tools/import_specs.py` 从旧 `test.py` 机械翻译、
-11 个手写在 `harness/specs_manual.py`、`fused_ln_linear_gelu` 手写在 `harness/kernels.py`。
+这 91 个 Spec 的来源分三类（§3.2）：78 个由 `tools/import_specs.py` 从旧 `test.py` 机械翻译、
+11 个手写在 `harness/specs_manual.py`、2 个手写在 `harness/kernels.py`
+（`fused_ln_linear_gelu`、`flash_decoding_attention`）。
 生成器翻译不了就报 MANUAL——**不发明参考实现**，也不为了跑通放宽容差。
 
 已知缺陷 **8 个**（`verify_specs.py` 的 `KNOWN_FAIL`，全量验收时报 XFAIL 而不是 FAIL）：
@@ -325,9 +326,10 @@ python3 tools/verify_specs.py --spot 10       # 90 个 Spec 全跑 + 10 个扰�
 
 ## 7. 当前状态与待办
 
-- 已注册 Spec：**90 个 / 92 个 kernel**（`BENCH.json` 里仍只有 `fused_ln_linear_gelu` 的 2 条记录，
-  `1d61067*`、`0c4ae54`——其余 kernel 有判据但还没测过基线）。
-- `harness suite` 现在会跑全部 90 个。
+- 已注册 Spec：**91 个 / 93 个 kernel**（`BENCH.json` 里目前有 4 个 kernel 的 5 条记录：
+  `fused_ln_linear_gelu`×2、`softmax_1D`、`grpo_surrogate_loss`、`flash_decoding_attention`——
+  其余 kernel 有判据但还没测过基线）。
+- `harness suite` 现在会跑全部 91 个。
 - 未实现：多形状 sweep（`Spec.variants` 已删除，避免空壳 API）。
 - 下一步：
   1. 按工作流 B 对 `fused_ln_linear_gelu` 做一轮真实优化（先出 3 条假设再改码）；
