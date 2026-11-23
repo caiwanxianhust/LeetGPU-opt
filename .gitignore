@@ -21,3 +21,8 @@ Thumbs.db
 .venv/
 venv/
 
+
+/AGENTS.md
+/BENCH.json
+/tools/cross_check.py
+/tools/import_specs.py
