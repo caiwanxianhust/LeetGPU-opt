@@ -37,7 +37,7 @@ def _require_cuda() -> bool:
     print(
         "CUDA unavailable. Under the workspace-write sandbox this shows up as "
         "`CUDA error 304: OS call failed` while nvidia-smi works; rerun with "
-        "Full access (AGENTS.md rule 4).",
+        "Full access (see README.md, section 环境要求).",
         file=sys.stderr,
     )
     return False

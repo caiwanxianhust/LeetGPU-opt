@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate runner for the LeetGPU kernel workflow (AGENTS.md workflows A/B).
+# Gate runner for the LeetGPU kernel workflow (see README.md section 6).
 #
 #   bash tools/gate.sh <kernel> [--processes N] [--no-build] [--baseline] [--min-gain PCT]
 #
@@ -65,7 +65,7 @@ print(canonical)
 if [ -z "$CANON" ]; then
     bad "B0  registry: '$NAME' has no Spec in harness/kernels.py"
     note ""
-    note "RESULT: FAIL ($FAIL failed) — add a Spec first (see AGENTS.md workflow A)"
+    note "RESULT: FAIL ($FAIL failed) — add a Spec first (see README.md section 6)"
     exit 1
 fi
 NAME="$CANON"
@@ -190,7 +190,7 @@ if [ -z "$STATUS" ]; then
 else
     UNEXPECTED="$(printf '%s\n' "$STATUS" | sed -e 's/^[ MARCUD?!][ MARCUD?!] //' | while read -r p; do
         case "$p" in
-            "src/$SRC.cu"|src/bindings.cu|src/cuda_kernels.cuh|src/utils.cuh|bench.py|BENCH.md|BENCH.json|AGENTS.md|README.md|setup.py|.gitignore|tools/*|harness/*|"harness/__pycache__/"*|"tools/__pycache__/"*) ;;
+            "src/$SRC.cu"|src/bindings.cu|src/cuda_kernels.cuh|src/utils.cuh|bench.py|BENCH.md|README.md|setup.py|.gitignore|docs/*|tools/*|harness/*|"harness/__pycache__/"*|"tools/__pycache__/"*) ;;
             *) printf '%s\n' "$p" ;;
         esac
     done)"
