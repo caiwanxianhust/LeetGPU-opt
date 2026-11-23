@@ -26,6 +26,9 @@ commit 列带 `*` 表示记录时工作区有未提交改动（`git.dirty=true`�
 | 2026-11-19 | 319ec02* | softmax_1D | 131072 | fp32 | 1.076 | 0.446 | 基线 | 0.05x | gate |
 | 2026-11-19 | 6a69f49* | grpo_surrogate_loss | 64x16 64x16x4096 64x16x4096 64x16x4096 | fp32 | 1.503 | 0.778 | 基线 | 1.31x | gate |
 | 2026-11-23 | 2d34bb8* | flash_decoding_attention | T1_S65536_H32_D128 | fp32 | 10.566 | 10.012 | 基线 | 0.89x | gate |
+| 2026-11-23 | 001f103 | flash_decoding_attention | T1_S65536_H32_D128 | fp32 | 10.194 | 9.878 | +3.5% (-0.372 ms) | 0.91x | gate |
+| 2026-11-23 | 001f103* | flash_decoding_attention | T1_S65536_H32_D128 | fp32 | 9.972 | 9.576 | +2.2% (-0.222 ms) | 待测 | — |
+| 2026-11-23 | 2171684* | flash_decoding_attention | T1_S65536_H32_D128 | fp32 | 8.769 | 8.733 | +12.1% (-1.203 ms) | 1.05x | gate |
 <!-- BENCH:TABLE:END -->
 
 ## 历史（旧 `bench.py` 口径，仅存档不参与判定）

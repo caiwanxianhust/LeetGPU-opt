@@ -146,16 +146,11 @@ static __global__ void flash_decoding_reduce_attention_kernel(
 
 
 static void flash_decoding_chunked_attention(
-    const float* Q, const float* K, const float* V, float* output, 
+    const float* Q, const float* K, const float* V, float* output,
+    float* d_O_chunk, float* d_lse,
     int T, int S, int H, int D)
 {
     const int num_chunks = div_up(S, CHUNK_SIZE);
-
-    float * d_buf;
-    size_t buf_size = (T * H * num_chunks * D + T * H * num_chunks) * sizeof(float);
-    CHECK_CUDA_ERROR(cudaMalloc((void **)&d_buf, buf_size));
-    float * d_O_chunk = d_buf;
-    float * d_lse = d_O_chunk + T * H * num_chunks * D;
 
     dim3 grid(num_chunks, H, T);
     dim3 block(128);
@@ -168,8 +163,6 @@ static void flash_decoding_chunked_attention(
     flash_decoding_reduce_attention_kernel<<<grid, block, num_chunks * sizeof(float)>>>(
         output, d_O_chunk, d_lse, T, S, H, D);
     CHECK_CUDA_ERROR(cudaGetLastError());
-
-    CHECK_CUDA_ERROR(cudaFree(d_buf));
 }
 
 
@@ -190,13 +183,28 @@ static void flash_decoding_chunked_attention(
 1 ≤ D ≤ 256
 Input values are in [-6, 6]
 Performance is measured with T = 1, S = 65,536, H = 32, D = 128
+
+The two-pass workspace (per-chunk partial outputs + per-chunk log-sum-exp) is
+allocated here from the PyTorch caching allocator instead of with cudaMalloc:
+repeated calls with the same size get the same block back from the pool for
+~2 us instead of paying a driver round trip of several hundred microseconds.
  */
 // Q, K, V, output are device pointers
 void flash_decoding_attention_cuda(
     const float* Q, const float* K, const float* V, float* output, 
     int T, int S, int H, int D) 
 {
-    flash_decoding_chunked_attention(Q, K, V, output, T, S, H, D);
+    const int num_chunks = div_up(S, CHUNK_SIZE);
+    const int64_t O_chunk_elems = static_cast<int64_t>(T) * H * num_chunks * D;
+    const int64_t lse_elems = static_cast<int64_t>(T) * H * num_chunks;
+
+    torch::Tensor scratch = torch::empty(
+        {O_chunk_elems + lse_elems},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    float* d_O_chunk = scratch.data_ptr<float>();
+    float* d_lse = d_O_chunk + O_chunk_elems;
+
+    flash_decoding_chunked_attention(Q, K, V, output, d_O_chunk, d_lse, T, S, H, D);
 }
 
 
